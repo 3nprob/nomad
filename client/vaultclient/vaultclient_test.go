@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,6 +78,11 @@ path "secret/metadata/*" {
   "token_policies": ["nomad-workloads"]
 }
 `
+
+	// VaultNamespaceHeaderName is the header set to specify which namespace
+	// the request is indented for. This is defined within Nomad, so we do not
+	// need to import the entire Vault SDK package.
+	VaultNamespaceHeaderName = "X-Vault-Namespace"
 )
 
 func renderVaultTemplate(tmplStr string, data any) ([]byte, error) {
@@ -218,13 +224,14 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 
 	// Derive Vault token using signed JWT.
 	jwtStr := signedWIDs[0].JWT
-	token, renewable, err := c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+	token, renewable, leaseDuration, err := c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 		JWT:       jwtStr,
 		Namespace: "default",
 	})
 	must.NoError(t, err)
 	must.NotEq(t, "", token)
 	must.True(t, renewable)
+	must.Eq(t, 72*60*60, leaseDuration) // token_period from role
 
 	// Verify token has expected properties.
 	v.Client.SetToken(token)
@@ -259,7 +266,7 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 	must.Eq(t, []any{"deny"}, (s.Data[pathDenied]).([]any))
 
 	// Derive Vault token with non-existing role.
-	token, _, err = c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+	token, _, _, err = c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 		JWT:       jwtStr,
 		Role:      "test",
 		Namespace: "default",
@@ -283,7 +290,7 @@ func TestVaultClient_NamespaceSupport(t *testing.T) {
 	conf.Namespace = testNs
 	c, err := NewVaultClient(conf, logger)
 	must.NoError(t, err)
-	must.Eq(t, testNs, c.client.Headers().Get(structs.VaultNamespaceHeaderName))
+	must.Eq(t, testNs, c.client.Headers().Get(VaultNamespaceHeaderName))
 }
 
 func TestVaultClient_Heap(t *testing.T) {
@@ -448,8 +455,14 @@ func TestVaultClient_SetUserAgent(t *testing.T) {
 func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	ci.Parallel(t)
 
+	// collects renewal requests that the mock Vault API gets
+	requestCh := make(chan string, 10)
+
 	// Create test server to mock the Vault API.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		requestCh <- string(b)
+
 		resp := vaultapi.Secret{
 			RequestID: uuid.Generate(),
 			LeaseID:   uuid.Generate(),
@@ -458,7 +471,7 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 			Auth: &vaultapi.SecretAuth{
 				ClientToken:   uuid.Generate(),
 				Accessor:      uuid.Generate(),
-				LeaseDuration: 300,
+				LeaseDuration: 1, // force a fast renewal
 			},
 		}
 
@@ -482,9 +495,9 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	vc.Start()
 
 	// Renew token multiple times in parallel.
-	requests := 100
+	expectedRenewals := 100
 	resultCh := make(chan any)
-	for i := 0; i < requests; i++ {
+	for range expectedRenewals {
 		go func() {
 			_, err := vc.RenewToken("token", 30)
 			resultCh <- err
@@ -494,12 +507,28 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	// Collect results with timeout.
 	timer, stop := helper.NewSafeTimer(3 * time.Second)
 	defer stop()
-	for i := 0; i < requests; i++ {
+
+	sawInitial := 0
+	sawRenew := 0
+	for {
 		select {
+		case got := <-requestCh:
+			switch got {
+			case `{"increment":1}`:
+				sawRenew++
+			case `{"increment":30}`:
+				sawInitial++
+			default:
+				t.Fatalf("unexpected request body: %q", got)
+			}
+			if sawInitial == expectedRenewals && sawRenew >= expectedRenewals {
+				return
+			}
 		case got := <-resultCh:
 			must.Nil(t, got, must.Sprintf("token renewal error: %v", got))
 		case <-timer.C:
-			t.Fatal("timeout waiting for token renewal")
+			t.Fatalf("timeout waiting for expected token renewals (initial: %d renewed: %d)",
+				sawInitial, sawRenew)
 		}
 	}
 }
@@ -524,7 +553,7 @@ func TestVaultClient_NamespaceReset(t *testing.T) {
 		must.NoError(t, err)
 		vc.Start()
 
-		_, _, err = vc.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+		_, _, _, err = vc.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 			JWT:       "bogus",
 			Namespace: "bar",
 		})

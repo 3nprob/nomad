@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/rpc"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/go-sockaddr"
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc/v2"
@@ -29,6 +31,7 @@ import (
 	"github.com/hashicorp/nomad/helper/tlsutil"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
+	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
@@ -81,6 +84,27 @@ func rpcClientWithTLS(t testing.TB, srv *Server, cfg *config.TLSConfig) rpc.Clie
 	must.NoError(t, err)
 
 	return pool.NewClientCodec(tlsConn)
+}
+
+func Test_newRpcHandler(t *testing.T) {
+
+	// Generate a custom yamux configuration, so we can ensure this gets stored
+	// as expected.
+	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.AcceptBacklog = math.MaxInt
+
+	testServer := Server{
+		config: &Config{
+			RPCMaxConnsPerClient: 10,
+			RPCSessionConfig:     yamuxConfig,
+		},
+		logger: hclog.NewInterceptLogger(nil),
+	}
+
+	testRPCHandler := newRpcHandler(&testServer)
+	must.NotNil(t, testRPCHandler)
+	must.NotNil(t, testRPCHandler.yamuxCfg)
+	must.Eq(t, yamuxConfig.AcceptBacklog, testRPCHandler.yamuxCfg.AcceptBacklog)
 }
 
 func TestRPC_forwardLeader(t *testing.T) {
@@ -231,6 +255,7 @@ func TestRPC_PlaintextRPCSucceedsWhenInUpgradeMode(t *testing.T) {
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.DataDir = path.Join(dir, "node1")
+		c.Region = "regionFoo"
 		c.TLSConfig = &config.TLSConfig{
 			EnableRPC:            true,
 			VerifyServerHostname: true,
@@ -241,18 +266,19 @@ func TestRPC_PlaintextRPCSucceedsWhenInUpgradeMode(t *testing.T) {
 		}
 	})
 	defer cleanupS1()
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
-	codec := rpcClient(t, s1)
+	tlsCodec := rpcClientWithTLS(t, s1, s1.config.TLSConfig)
 
 	// Create the register request
 	node := mock.Node()
 	req := &structs.NodeRegisterRequest{
 		Node:         node,
-		WriteRequest: structs.WriteRequest{Region: "global"},
+		WriteRequest: structs.WriteRequest{Region: s1.Region()},
 	}
 
 	var resp structs.GenericResponse
-	err := msgpackrpc.CallWithCodec(codec, "Node.Register", req, &resp)
+	err := msgpackrpc.CallWithCodec(tlsCodec, "Node.Register", req, &resp)
 	assert.Nil(err)
 
 	// Check that heartbeatTimers has the heartbeat ID
@@ -313,7 +339,7 @@ func TestRPC_streamingRpcConn_badMethod(t *testing.T) {
 	testutil.WaitForLeader(t, s2.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -372,7 +398,7 @@ func TestRPC_streamingRpcConn_badMethod_TLS(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -409,7 +435,7 @@ func TestRPC_streamingRpcConn_goodMethod_Plaintext(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -482,7 +508,7 @@ func TestRPC_streamingRpcConn_goodMethod_TLS(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -530,7 +556,7 @@ func TestRPC_handleMultiplexV2(t *testing.T) {
 	// Start the handler
 	doneCh := make(chan struct{})
 	go func() {
-		s.handleConn(context.Background(), p2, &RPCContext{Conn: p2, SessionConfig: yamux.DefaultConfig()})
+		s.handleConn(context.Background(), p2, &RPCContext{Conn: p2})
 		close(doneCh)
 	}()
 

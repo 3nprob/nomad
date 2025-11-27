@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/state/paginator"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/scheduler"
+	sstructs "github.com/hashicorp/nomad/scheduler/structs"
 )
 
 const (
@@ -281,19 +282,6 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 			if errCE := j.srv.consulConfigEntries.SetTerminatingCE(
 				ctx, ns, service, entries.Cluster, entries.Partition, entry); errCE != nil {
 				return errCE
-			}
-		}
-	}
-
-	// Preserve the existing task group counts, if so requested
-	if existingJob != nil && args.PreserveCounts {
-		prevCounts := make(map[string]int)
-		for _, tg := range existingJob.TaskGroups {
-			prevCounts[tg.Name] = tg.Count
-		}
-		for _, tg := range args.Job.TaskGroups {
-			if count, ok := prevCounts[tg.Name]; ok {
-				tg.Count = count
 			}
 		}
 	}
@@ -1052,8 +1040,19 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 			}
 		}
 
+		// Ensure that JobMaxCount is respected.
+		newCount := int(*args.Count)
+		totalCount := 0
+		for _, tg := range job.TaskGroups {
+			totalCount += tg.Count
+		}
+		totalCount = totalCount - group.Count + newCount
+		if j.srv.config.JobMaxCount > 0 && totalCount > j.srv.config.JobMaxCount {
+			return fmt.Errorf("total count was greater than configured job_max_count: %d > %d", totalCount, j.srv.config.JobMaxCount)
+		}
+
 		// Update group count
-		group.Count = int(*args.Count)
+		group.Count = newCount
 		job.SubmitTime = now
 
 		// Block scaling event if there's an active deployment
@@ -1893,7 +1892,7 @@ func (j *Job) Plan(args *structs.JobPlanRequest, reply *structs.JobPlanResponse)
 
 	// Create an in-memory Planner that returns no errors and stores the
 	// submitted plan and created evals.
-	planner := &scheduler.Harness{
+	planner := &sstructs.PlanBuilder{
 		State: &snap.StateStore,
 	}
 
@@ -2106,12 +2105,29 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	// Compress the payload
 	dispatchJob.Payload = snappy.Encode(nil, args.Payload)
 
+	// If the job is periodic, we don't create an eval.
+	var eval *structs.Evaluation
+	if !dispatchJob.IsPeriodic() {
+		now := time.Now().UnixNano()
+		eval = &structs.Evaluation{
+			ID:          uuid.Generate(),
+			Namespace:   args.RequestNamespace(),
+			Priority:    dispatchJob.Priority,
+			Type:        dispatchJob.Type,
+			TriggeredBy: structs.EvalTriggerJobRegister,
+			JobID:       dispatchJob.ID,
+			Status:      structs.EvalStatusPending,
+			CreateTime:  now,
+			ModifyTime:  now,
+		}
+	}
+
 	regReq := &structs.JobRegisterRequest{
 		Job:          dispatchJob,
 		WriteRequest: args.WriteRequest,
+		Eval:         eval,
 	}
 
-	// Commit this update via Raft
 	_, jobCreateIndex, err := j.srv.raftApply(structs.JobRegisterRequestType, regReq)
 	if err != nil {
 		j.logger.Error("dispatched job register failed", "error", err)
@@ -2122,38 +2138,9 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	reply.DispatchedJobID = dispatchJob.ID
 	reply.Index = jobCreateIndex
 
-	// If the job is periodic, we don't create an eval.
-	if !dispatchJob.IsPeriodic() {
-		// Create a new evaluation
-		now := time.Now().UnixNano()
-		eval := &structs.Evaluation{
-			ID:             uuid.Generate(),
-			Namespace:      args.RequestNamespace(),
-			Priority:       dispatchJob.Priority,
-			Type:           dispatchJob.Type,
-			TriggeredBy:    structs.EvalTriggerJobRegister,
-			JobID:          dispatchJob.ID,
-			JobModifyIndex: jobCreateIndex,
-			Status:         structs.EvalStatusPending,
-			CreateTime:     now,
-			ModifyTime:     now,
-		}
-		update := &structs.EvalUpdateRequest{
-			Evals:        []*structs.Evaluation{eval},
-			WriteRequest: structs.WriteRequest{Region: args.Region},
-		}
-
-		// Commit this evaluation via Raft
-		_, evalIndex, err := j.srv.raftApply(structs.EvalUpdateRequestType, update)
-		if err != nil {
-			j.logger.Error("eval create failed", "error", err, "method", "dispatch")
-			return err
-		}
-
-		// Setup the reply
+	if eval != nil {
 		reply.EvalID = eval.ID
-		reply.EvalCreateIndex = evalIndex
-		reply.Index = evalIndex
+		reply.EvalCreateIndex = jobCreateIndex
 	}
 
 	return nil

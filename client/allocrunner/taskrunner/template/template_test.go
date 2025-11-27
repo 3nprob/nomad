@@ -158,6 +158,10 @@ func (h *testHarness) startWithErr() error {
 		MaxTemplateEventRate: h.emitRate,
 		TaskID:               uuid.Generate(),
 	})
+
+	if err == nil {
+		go h.manager.Run()
+	}
 	return err
 }
 
@@ -304,6 +308,31 @@ func TestTaskTemplateManager_InvalidConfig(t *testing.T) {
 				MaxTemplateEventRate: DefaultMaxTemplateEventRate,
 			},
 			expectedErr: "parse signal",
+		},
+		{
+			name: "different Once values",
+			config: &TaskTemplateManagerConfig{
+				UnblockCh: hooks.UnblockCh,
+				Templates: []*structs.Template{
+					{
+						DestPath:     "foo",
+						EmbeddedTmpl: "hello, world",
+						Once:         true,
+					},
+					{
+						DestPath:     "bar",
+						EmbeddedTmpl: "hello, world",
+						Once:         false,
+					},
+				},
+				ClientConfig:         clientConfig,
+				Lifecycle:            hooks,
+				Events:               hooks,
+				TaskDir:              taskDir,
+				EnvBuilder:           envBuilder,
+				MaxTemplateEventRate: DefaultMaxTemplateEventRate,
+			},
+			expectedErr: "templates should have same Once value",
 		},
 	}
 
@@ -1670,6 +1699,7 @@ func TestTaskTemplateManager_Env_InterpolatedDest(t *testing.T) {
 		map[string]string{"NOMAD_META_path": "exists"},
 		map[string]string{},
 		map[string]string{},
+		map[string]string{},
 		d, "")
 
 	vars, err := loadTemplateEnv(templates, taskEnv)
@@ -2714,4 +2744,32 @@ func TestTaskTemplateManager_writeToFile(t *testing.T) {
 	r, err = os.ReadFile(path)
 	must.NoError(t, err)
 	must.Eq(t, "hello", string(r))
+}
+
+func TestTaskTemplateManager_deniedSprig(t *testing.T) {
+	ci.Parallel(t)
+
+	file := "my.tmpl"
+	template := &structs.Template{
+		EmbeddedTmpl: `{{ "hello" | sprig_env }}`,
+		DestPath:     file,
+		ChangeMode:   structs.TemplateChangeModeNoop,
+	}
+
+	harness := newTestHarness(t, []*structs.Template{template}, false, false)
+
+	must.NoError(t, harness.startWithErr(), must.Sprint("couldn't setup initial harness"))
+	defer harness.stop()
+
+	// Using sprig_env should cause a kill
+	select {
+	case <-harness.mockHooks.UnblockCh:
+	case <-harness.mockHooks.EmitEventCh:
+		t.Fatalf("Task event should not have been emitted")
+	case e := <-harness.mockHooks.KillCh:
+		must.StrContains(t, e.DisplayMessage, "not defined")
+	case <-time.After(time.Duration(5*testutil.TestMultiplier()) * time.Second):
+		t.Fatalf("timeout")
+	}
+
 }

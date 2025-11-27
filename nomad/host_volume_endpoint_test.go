@@ -38,6 +38,7 @@ func TestHostVolumeEndpoint_CreateRegisterGetDelete(t *testing.T) {
 	})
 	t.Cleanup(cleanupSrv)
 	testutil.WaitForLeader(t, srv.RPC)
+	testutil.WaitForKeyring(t, srv.RPC, srv.config.Region)
 	store := srv.fsm.State()
 
 	c1, node1 := newMockHostVolumeClient(t, srv, "prod")
@@ -392,16 +393,25 @@ func TestHostVolumeEndpoint_CreateRegisterGetDelete(t *testing.T) {
 		must.Nil(t, getResp.Volume)
 	})
 
+	index++
+	must.NoError(t, srv.State().DeleteNode(structs.MsgTypeTestSetup, index, []string{vol1.NodeID}))
+
 	// delete vol1 to finish cleaning up
-	var delResp structs.HostVolumeDeleteResponse
-	err := msgpackrpc.CallWithCodec(codec, "HostVolume.Delete", &structs.HostVolumeDeleteRequest{
+	delReq := &structs.HostVolumeDeleteRequest{
 		VolumeID: vol1.ID,
 		WriteRequest: structs.WriteRequest{
 			Region:    srv.Region(),
 			Namespace: vol1.Namespace,
 			AuthToken: powerToken,
 		},
-	}, &delResp)
+	}
+
+	var delResp structs.HostVolumeDeleteResponse
+	err := msgpackrpc.CallWithCodec(codec, "HostVolume.Delete", delReq, &delResp)
+	must.EqError(t, err, "volume cannot be removed from unknown node without force=true")
+
+	delReq.Force = true
+	err = msgpackrpc.CallWithCodec(codec, "HostVolume.Delete", delReq, &delResp)
 	must.NoError(t, err)
 
 	// should be no volumes left
@@ -425,6 +435,7 @@ func TestHostVolumeEndpoint_List(t *testing.T) {
 	})
 	t.Cleanup(cleanupSrv)
 	testutil.WaitForLeader(t, srv.RPC)
+	testutil.WaitForKeyring(t, srv.RPC, srv.config.Region)
 	store := srv.fsm.State()
 	codec := rpcClient(t, srv)
 
@@ -800,6 +811,7 @@ func TestHostVolumeEndpoint_concurrency(t *testing.T) {
 	srv, cleanup := TestServer(t, func(c *Config) { c.NumSchedulers = 0 })
 	t.Cleanup(cleanup)
 	testutil.WaitForLeader(t, srv.RPC)
+	testutil.WaitForKeyring(t, srv.RPC, srv.config.Region)
 
 	c, node := newMockHostVolumeClient(t, srv, "default")
 

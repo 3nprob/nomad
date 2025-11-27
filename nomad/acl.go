@@ -16,6 +16,10 @@ func (s *Server) AuthenticateServerOnly(ctx *RPCContext, args structs.RequestWit
 	return s.auth.AuthenticateServerOnly(ctx, args)
 }
 
+func (s *Server) AuthenticateNodeIdentityGenerator(ctx *RPCContext, args structs.RequestWithIdentity) error {
+	return s.auth.AuthenticateNodeIdentityGenerator(ctx, args)
+}
+
 func (s *Server) AuthenticateClientOnly(ctx *RPCContext, args structs.RequestWithIdentity) (*acl.ACL, error) {
 	return s.auth.AuthenticateClientOnly(ctx, args)
 }
@@ -26,10 +30,6 @@ func (s *Server) ResolveACL(args structs.RequestWithIdentity) (*acl.ACL, error) 
 
 func (s *Server) VerifyClaim(token string) (*structs.IdentityClaims, error) {
 	return s.auth.VerifyClaim(token)
-}
-
-func (s *Server) ResolveToken(secretID string) (*acl.ACL, error) {
-	return s.auth.ResolveToken(secretID)
 }
 
 func (s *Server) ResolvePoliciesForClaims(claims *structs.IdentityClaims) ([]*structs.ACLPolicy, error) {

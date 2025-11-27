@@ -4,6 +4,11 @@ page_title: Nodes - HTTP API
 description: The /node endpoints are used to query for and interact with client nodes.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # Nodes HTTP API
 
 The `/node` endpoints are used to query for and interact with client nodes.
@@ -443,14 +448,6 @@ $ curl \
       }
     ]
   },
-  "Reserved": {
-    "CPU": 0,
-    "Devices": null,
-    "DiskMB": 0,
-    "IOPS": 0,
-    "MemoryMB": 0,
-    "Networks": null
-  },
   "ReservedResources": {
     "Cpu": {
       "CpuShares": 0
@@ -464,33 +461,6 @@ $ curl \
     "Networks": {
       "ReservedHostPorts": ""
     }
-  },
-  "Resources": {
-    "CPU": 32000,
-    "Devices": null,
-    "DiskMB": 7890,
-    "IOPS": 0,
-    "MemoryMB": 15803,
-    "Networks": [
-      {
-        "CIDR": "127.0.0.1/32",
-        "Device": "lo",
-        "DynamicPorts": null,
-        "IP": "127.0.0.1",
-        "MBits": 1000,
-        "Mode": "",
-        "ReservedPorts": null
-      },
-      {
-        "CIDR": "::1/128",
-        "Device": "lo",
-        "DynamicPorts": null,
-        "IP": "::1",
-        "MBits": 1000,
-        "Mode": "",
-        "ReservedPorts": null
-      }
-    ]
   },
   "SchedulingEligibility": "eligible",
   "SecretID": "",
@@ -948,7 +918,7 @@ $ curl \
 This endpoint toggles the drain mode of the node. When draining is enabled, no
 further allocations will be assigned to this node, and existing allocations will
 be migrated to new nodes. See the [Workload Migration
-Guide](/nomad/tutorials/manage-clusters/node-drain) for suggested usage.
+Guide](/nomad/docs/manage/migrate-workloads) for suggested usage.
 
 | Method | Path                      | Produces           |
 | ------ | ------------------------- | ------------------ |

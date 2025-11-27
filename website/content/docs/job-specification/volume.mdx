@@ -1,11 +1,16 @@
 ---
 layout: docs
-page_title: volume Block - Job Specification
+page_title: volume block in the job specification
 description: >-
-  Configure storage volumes in the "volume" block of a Nomad job specification. Specify dynamic host or Container Storage Interface (CSI) volume type, node access mode, filesystem or block device attachment mode, and mount options. Enable read only access and mounting a unique volume per node. Learn about volume interpolation.
+  Configure storage volumes in the `volume` block of a Nomad job specification. Specify dynamic host or Container Storage Interface (CSI) volume type, node access mode, filesystem or block device attachment mode, and mount options. Enable read only access and mounting a unique volume per node. Learn about volume interpolation.
 ---
 
-# `volume` Block
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
+# `volume` block in the job specification
 
 <Placement groups={['job', 'group', 'volume']} />
 
@@ -58,7 +63,7 @@ plugins][csi_plugin].
 The Nomad client makes the volumes available to tasks according to
 the [volume_mount][volume_mount] block in the `task` configuration.
 
-## `volume` Parameters
+## Parameters
 
 - `type` `(string: "")` - Specifies the type of a given volume. The valid volume
   types are `"host"` and `"csi"`. Setting the `"host"` value can request either
@@ -147,7 +152,7 @@ The following fields are only valid for volumes with `type = "csi"`:
   - `fs_type`: file system type (ex. `"ext4"`)
   - `mount_flags`: the flags passed to `mount` (ex. `["ro", "noatime"]`)
 
-## Volume Interpolation
+## Volume interpolation
 
 Because volumes represent state, many workloads with multiple allocations will
 want to mount specific volumes to specific tasks. The `volume` block is used
@@ -238,12 +243,12 @@ ID        Node ID   Task Group  Version  Desired  Status   Created  Modified
 
 [volume_mount]: /nomad/docs/job-specification/volume_mount 'Nomad volume_mount Job Specification'
 [host_volume]: /nomad/docs/configuration/client#host_volume-block
-[csi_volume]: /nomad/docs/commands/volume/register
+[csi_volume]: /nomad/commands/volume/register
 [csi_plugin]: /nomad/docs/job-specification/csi_plugin
-[csi_volume]: /nomad/docs/commands/volume/register
-[attachment mode]: /nomad/docs/commands/volume/register#attachment_mode
-[volume registration]: /nomad/docs/commands/volume/register#mount_options
+[csi_volume]: /nomad/commands/volume/register
+[attachment mode]: /nomad/commands/volume/register#attachment_mode
+[volume registration]: /nomad/commands/volume/register#mount_options
 [dynamic host volumes]: /nomad/docs/other-specifications/volume/host
 [stateful deployments]: /nomad/docs/concepts/stateful-deployments
-[`volume create`]: /nomad/docs/commands/volume/create
-[`volume register`]: /nomad/docs/commands/volume/register
+[`volume create`]: /nomad/commands/volume/create
+[`volume register`]: /nomad/commands/volume/register

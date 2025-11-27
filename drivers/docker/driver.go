@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types"
 	containerapi "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -27,7 +28,6 @@ import (
 	networkapi "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/hashicorp/consul-template/signals"
 	hclog "github.com/hashicorp/go-hclog"
@@ -948,6 +948,30 @@ func memoryLimits(driverHardLimitMB int64, taskMemory drivers.MemoryResources) (
 	return hard * 1024 * 1024, softBytes
 }
 
+// maxCPUShares is the maximum value for cpu_shares in cgroups v1
+// https://github.com/torvalds/linux/blob/v6.15/kernel/sched/sched.h#L503
+const maxCPUShares = 262_144
+const minCPUShares = 2
+
+// cpuResources normalizes the requested CPU shares when the total compute
+// available on the node is larger than the largest share value allowed by the
+// kernel. On cgroups v2, Docker will re-normalize this to be within the
+// acceptable range for cpu.weight [1-10000].
+func (d *Driver) cpuResources(requested int64) int64 {
+	if requested < minCPUShares {
+		return minCPUShares
+	}
+	if d.compute.TotalCompute < maxCPUShares {
+		return requested
+	}
+
+	result := int64(float64(requested) / float64(d.compute.TotalCompute) * maxCPUShares)
+	if result < minCPUShares {
+		return minCPUShares
+	}
+	return result
+}
+
 func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *TaskConfig,
 	imageID string) (createContainerOptions, error) {
 
@@ -1027,7 +1051,10 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		pidsLimit = driverConfig.PidsLimit
 	}
 
+	cpuShares := d.cpuResources(task.Resources.LinuxResources.CPUShares)
+
 	hostConfig := &containerapi.HostConfig{
+		CgroupnsMode: containerapi.CgroupnsMode(driverConfig.CgroupnsMode),
 		// do not set cgroup parent anymore
 
 		OomScoreAdj: driverConfig.OOMScoreAdj, // ignored on platforms other than linux
@@ -1048,7 +1075,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	hostConfig.Resources = containerapi.Resources{
 		Memory:            memory,            // hard limit
 		MemoryReservation: memoryReservation, // soft limit
-		CPUShares:         task.Resources.LinuxResources.CPUShares,
+		CPUShares:         cpuShares,
 		CpusetCpus:        task.Resources.LinuxResources.CpusetCpus,
 		PidsLimit:         &pidsLimit,
 	}
@@ -1647,7 +1674,7 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 
 	c, err := dockerClient.ContainerInspect(d.ctx, h.containerID)
 	if err != nil {
-		if _, ok := err.(errdefs.ErrNotFound); ok {
+		if errdefs.IsNotFound(err) {
 			h.logger.Info("container was removed out of band, will proceed with DestroyTask",
 				"error", err)
 		} else {

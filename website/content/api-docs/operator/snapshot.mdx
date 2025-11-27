@@ -5,13 +5,18 @@ description: |-
   The /operator/snapshot endpoints save and restore Nomad's server state for disaster recovery.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # Snapshot Operator HTTP API
 
 ## Generate Snapshot
 
 This endpoint generates and returns an atomic, point-in-time snapshot of the
 Nomad server state for disaster recovery. Snapshots include all state managed by Nomad's
-Raft [consensus protocol](/nomad/docs/concepts/consensus).
+Raft [consensus protocol](/nomad/docs/architecture/cluster/consensus).
 
 Snapshots are exposed as gzipped tar archives which internally contain the Raft
 metadata required to restore, as well as a binary serialized version of the

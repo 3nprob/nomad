@@ -34,6 +34,14 @@ ifndef NOMAD_NO_UI
 GO_TAGS := ui $(GO_TAGS)
 endif
 
+# Some Go tools require the tags to be a comma-separated list. Perform a
+# substitution from the space to a comma and create a new variable, so we can
+# use both
+null  :=
+space := $(null) #
+comma := ,
+GO_TAGS_COMMA := $(subst $(space),$(comma),$(strip $(GO_TAGS)))
+
 #GOTEST_GROUP is set in CI pipelines. We have to set it for local run.
 ifndef GOTEST_GROUP
 GOTEST_GROUP := nomad client command drivers quick
@@ -46,7 +54,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 # or backport version, without the leading "v". main should have the latest
 # published release here, and release branches should point to the latest
 # published release in their X.Y release line.
-LAST_RELEASE ?= 1.10.1
+LAST_RELEASE ?= 1.11.0
 
 default: help
 
@@ -133,7 +141,7 @@ deps:  ## Install build and development dependencies
 	go install gotest.tools/gotestsum@v1.10.0
 	go install github.com/hashicorp/hcl/v2/cmd/hclfmt@d0c4fa8b0bbc2e4eeccd1ed2a32c2089ed8c5cf1
 	go install github.com/golang/protobuf/protoc-gen-go@v1.3.4
-	go install github.com/hashicorp/go-msgpack/v2/codec/codecgen@v2.1.2
+	go install github.com/hashicorp/go-msgpack/v2/codec/codecgen@v2.1.5
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
 	go install golang.org/x/tools/cmd/stringer@v0.30.0
@@ -143,9 +151,9 @@ deps:  ## Install build and development dependencies
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 	@echo "==> Updating linter dependencies..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0
 	go install github.com/client9/misspell/cmd/misspell@v0.3.4
-	go install github.com/hashicorp/go-hclog/hclogvet@feaf6d2ec20fd895e711195c99e3fde93a68afc5
+	go install github.com/hashicorp/go-hclog/hclogvet@bd6194f1f5b126dbad2a3fdf3b9b6556cc3496c3
 
 .PHONY: git-hooks
 git-dir = $(shell git rev-parse --git-dir)
@@ -163,7 +171,7 @@ check: ## Lint the source code
 	@cd ./api && golangci-lint run --config ../.golangci.yml --build-tags "$(GO_TAGS)"
 
 	@echo "==> Linting hclog statements..."
-	@hclogvet .
+	@GOFLAGS="-tags=$(GO_TAGS_COMMA)" hclogvet ./...
 
 	@echo "==> Spell checking website..."
 	@misspell -error -source=text website/content/
@@ -296,7 +304,7 @@ test-nomad: # dev ## Run Nomad unit tests
 	@echo "==> with packages $(GOTEST_PKGS)"
 	gotestsum --format=testname --rerun-fails=3 --packages="$(GOTEST_PKGS)" -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS)
@@ -306,7 +314,7 @@ test-nomad-module: dev ## Run Nomad unit tests on sub-module
 	@echo "==> Running Nomad unit tests on sub-module $(GOTEST_MOD)"
 	cd $(GOTEST_MOD); gotestsum --format=testname --rerun-fails=3 --packages=./... -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-race \
 		-tags "$(GO_TAGS)" \
@@ -324,7 +332,7 @@ e2e-test: dev ## Run the Nomad e2e test suite
 .PHONY: integration-test
 integration-test: dev ## Run Nomad integration tests
 	@echo "==> Running Nomad integration test suites:"
-	NOMAD_E2E_VAULTCOMPAT=1 go test \
+	NOMAD_E2E_VAULTCOMPAT=1 gotestsum --format=testname -- \
 		-v \
 		-race \
 		-timeout=900s \
@@ -335,13 +343,24 @@ integration-test: dev ## Run Nomad integration tests
 .PHONY: integration-test-consul
 integration-test-consul: dev ## Run Nomad integration tests
 	@echo "==> Running Nomad integration test suite for Consul:"
-	NOMAD_E2E_CONSULCOMPAT=1 go test \
+	NOMAD_E2E_CONSULCOMPAT=1 gotestsum --format=testname -- \
 		-v \
 		-race \
 		-timeout=900s \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		github.com/hashicorp/nomad/e2e/consulcompat
+
+.PHONY: integration-test-client-intro
+integration-test-client-intro: dev ## Run Nomad's Client Intro integration tests
+	@echo "==> Running Nomad integration test suite for Client Introduction:"
+	NOMAD_E2E_CLIENT_INTRO=1 gotestsum --format=testname -- \
+		-v \
+		-race \
+		-timeout=120s \
+		-count=1 \
+		-tags "$(GO_TAGS)" \
+		github.com/hashicorp/nomad/e2e/client_intro
 
 .PHONY: clean
 clean: GOPATH=$(shell go env GOPATH)
@@ -371,24 +390,24 @@ static-assets: ## Compile the static routes to serve alongside the API
 .PHONY: test-ui
 test-ui: ## Run Nomad UI test suite
 	@echo "==> Installing JavaScript assets"
-	@cd ui && npm rebuild node-sass
-	@cd ui && yarn install
+	@pnpm rebuild node-sass
+	@pnpm install --silent --fetch-timeout 300000
 	@echo "==> Running ember tests"
-	@cd ui && npm test
+	@pnpm -F nomad-ui test
 
 .PHONY: ember-dist
 ember-dist: ## Build the static UI assets from source
 	@echo "==> Installing JavaScript assets"
-	@cd ui && yarn install --silent --network-timeout 300000
-	@cd ui && npm rebuild node-sass
+	@pnpm install --silent --fetch-timeout 300000
+	@pnpm rebuild node-sass
 	@echo "==> Building Ember application"
-	@cd ui && npm run build
+	@pnpm -F nomad-ui build
 
 .PHONY: dev-ui
 dev-ui: ember-dist static-assets ## Build a dev UI binary
 	@$(MAKE) NOMAD_UI_TAG="ui" dev ## Build a dev binary with the UI baked in
 
-HELP_FORMAT="    \033[36m%-25s\033[0m %s\n"
+HELP_FORMAT="    \033[36m%-32s\033[0m %s\n"
 .PHONY: help
 help: ## Display this usage information
 	@echo "Valid targets:"
@@ -441,7 +460,7 @@ test: ## Use this target as a smoke test
 	@echo "==> with packages: $(GOTEST_PKGS)"
 	gotestsum --format=testname --packages="$(GOTEST_PKGS)" -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS)
@@ -458,6 +477,8 @@ copywriteheaders:
 
 .PHONY: cni
 cni: ## Install CNI plugins. Run this as root.
+	@# Detect architecture: x86_64 -> amd64, aarch64 -> arm64
+	$(eval CNI_ARCH := $(shell if [ "$(THIS_ARCH)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi))
 	mkdir -p /opt/cni/bin
-	curl --fail -LsO "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-amd64-v1.3.0.tgz"
-	tar -C /opt/cni/bin -xf cni-plugins-linux-amd64-v1.3.0.tgz
+	curl --fail -LsO "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-$(CNI_ARCH)-v1.3.0.tgz"
+	tar -C /opt/cni/bin -xf cni-plugins-linux-$(CNI_ARCH)-v1.3.0.tgz

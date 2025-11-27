@@ -4,6 +4,11 @@ page_title: Workload Identity
 description: Nomad's workload identity feature isolates and uniquely identities each workload so you can associate Access Control List (ACL) policies to jobs. Learn about workload identity claims, claims attributes specific to Nomad Enterprise, default workload ACL policy, and workload identity for Consul and Vault.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # Workload Identity
 
 This page provides conceptual information about Nomad's workload identity
@@ -155,13 +160,21 @@ nomad acl policy apply \
    redis-policy ./policy.hcl
 ```
 
-And you can apply this policy to all groups in the job by omitting both the
+You can apply this policy to all groups in the job by omitting both the
 `-group` and `-task` flag:
 
 ```shell-session
 nomad acl policy apply \
    -namespace default -job example \
    redis-policy ./policy.hcl
+```
+
+And you can apply this policy to all jobs in the namespace by omitting the
+`-job`, `-group`, and `-task` flag:
+
+```shell-session
+nomad acl policy apply \
+   -namespace default redis-policy ./policy.hcl
 ```
 
 ### Task API
@@ -182,12 +195,12 @@ integration pages for more information.
 [jobspec_vault_ns]: /nomad/docs/job-specification/vault#namespace
 [jobspec_vault_role]: /nomad/docs/job-specification/vault#role
 [vault_role_agent_config]: /nomad/docs/configuration/vault#create_from_role
-[plan applier]: /nomad/docs/concepts/scheduling/scheduling
+[plan applier]: /nomad/docs/concepts/scheduling/how-scheduling-works
 [JSON Web Token (JWT)]: https://datatracker.ietf.org/doc/html/rfc7519
 [Task Access to Variables]: /nomad/docs/concepts/variables#task-access-to-variables
 [List Services API]: /nomad/api-docs/services#list-services
 [Read Service API]: /nomad/api-docs/services#read-service
 [windows]: https://devblogs.microsoft.com/commandline/af_unix-comes-to-windows/
 [taskapi]: /nomad/api-docs/task-api
-[consul_int]: /nomad/docs/integrations/consul-integration
-[vault_int]: /nomad/docs/integrations/vault-integration
+[consul_int]: /nomad/docs/secure/acl/consul
+[vault_int]: /nomad/docs/secure/vault

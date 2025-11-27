@@ -6,13 +6,23 @@
 package getter
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
+	log "github.com/hashicorp/go-hclog"
 	"github.com/mitchellh/go-homedir"
 	"github.com/shoenig/go-landlock"
 	"golang.org/x/sys/unix"
 )
+
+// initialDirs are the initial set of paths configured for landlock
+var initialDirs = map[string]string{
+	"/bin":           "rx",
+	"/usr/bin":       "rx",
+	"/usr/local/bin": "rx",
+	"/usr/libexec":   "rx",
+}
 
 // findHomeDir returns the home directory as provided by os.UserHomeDir. In case
 // os.UserHomeDir returns an error, we return /root if the current process is being
@@ -46,12 +56,18 @@ func defaultEnvironment(taskDir string) map[string]string {
 	}
 }
 
+// lockdownAvailable returns if lockdown is implemented for
+// the current platform.
+func lockdownAvailable() bool {
+	return landlock.Available()
+}
+
 // lockdown isolates this process to only be able to write and
 // create files in the task's task directory.
 // dir - the task directory
 //
 // Only applies to Linux, when available.
-func lockdown(allocDir, taskDir string, extra []string) error {
+func lockdown(l log.Logger, allocDir, taskDir string, extra []string) error {
 	// landlock not present in the kernel, do not sandbox
 	if !landlock.Available() {
 		return nil
@@ -60,12 +76,26 @@ func lockdown(allocDir, taskDir string, extra []string) error {
 		landlock.DNS(),
 		landlock.Certs(),
 		landlock.Shared(),
-		landlock.Dir("/bin", "rx"),
-		landlock.Dir("/usr/bin", "rx"),
-		landlock.Dir("/usr/local/bin", "rx"),
-		landlock.Dir("/usr/libexec", "rx"),
 		landlock.Dir(allocDir, "rwc"),
 		landlock.Dir(taskDir, "rwc"),
+	}
+
+	// Add the initial directories
+	for p, mode := range initialDirs {
+		_, err := os.Stat(p)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// paths that do not exist are skipped
+				l.Debug("landlock is skipping path that does not exist", "path", p)
+			} else {
+				// other errors should be logged to provide context on why
+				// the path is not included
+				l.Warn("landlock setup failed to stat path, skipping", "path", p, "error", err)
+			}
+
+			continue
+		}
+		paths = append(paths, landlock.Dir(p, mode))
 	}
 
 	for _, p := range extra {
@@ -89,6 +119,7 @@ func additionalFilesForVCS() []*landlock.Path {
 		gitGlobalFile  = "/etc/gitconfig"           // https://git-scm.com/docs/git-config#SCOPES
 		hgGlobalFile   = "/etc/mercurial/hgrc"      // https://www.mercurial-scm.org/doc/hgrc.5.html#files
 		hgGlobalDir    = "/etc/mercurial/hgrc.d"    // https://www.mercurial-scm.org/doc/hgrc.5.html#files
+		urandom        = "/dev/urandom"             // git
 	)
 	return filesForVCS(
 		homeSSHDir,
@@ -98,6 +129,7 @@ func additionalFilesForVCS() []*landlock.Path {
 		gitGlobalFile,
 		hgGlobalFile,
 		hgGlobalDir,
+		urandom,
 	)
 }
 
@@ -108,7 +140,8 @@ func filesForVCS(
 	etcKnownHosts,
 	gitGlobalFile,
 	hgGlobalFile,
-	hgGlobalDir string) []*landlock.Path {
+	hgGlobalDir,
+	urandom string) []*landlock.Path {
 
 	// omit ssh if there is no home directory
 	home := findHomeDir()
@@ -142,6 +175,9 @@ func filesForVCS(
 	}
 	if exists(hgGlobalDir) {
 		result = append(result, landlock.Dir(hgGlobalDir, "r"))
+	}
+	if exists(urandom) {
+		result = append(result, landlock.File(urandom, "r"))
 	}
 	return result
 }

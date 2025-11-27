@@ -26,8 +26,10 @@ import (
 	client "github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/fingerprint"
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/ipaddr"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/users"
+	"github.com/hashicorp/nomad/helper/winsvc"
 	"github.com/hashicorp/nomad/nomad"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -198,6 +200,9 @@ type Config struct {
 
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+
+	// Configure logging to Windows eventlog
+	Eventlog *Eventlog `hcl:"eventlog"`
 }
 
 func (c *Config) defaultConsul() *config.ConsulConfig {
@@ -238,6 +243,18 @@ type ClientConfig struct {
 
 	// HostVolumePluginDir directory contains dynamic host volume plugins
 	HostVolumePluginDir string `hcl:"host_volume_plugin_dir"`
+
+	// IntroToken is used to introduce the client to the servers. It is an
+	// optional parameter that cannot be passed within the configuration file
+	// object.
+	//
+	// It can be passed as a command line argument to the agent, set via an
+	// environment variable, or placed in a file at "${data_dir}/intro_token".
+	IntroToken string `hcl:"-"`
+
+	// CommonPluginDir is the root directory for plugins that implement
+	// the common plugin interface
+	CommonPluginDir string `hcl:"common_plugin_dir"`
 
 	// Servers is a list of known server addresses. These are as "host:port"
 	Servers []string `hcl:"servers"`
@@ -341,6 +358,11 @@ type ClientConfig struct {
 	// before garbage collection is triggered.
 	GCMaxAllocs int `hcl:"gc_max_allocs"`
 
+	// GCVolumesOnNodeGC indicates that the server should GC any dynamic host
+	// volumes on this node when the node is GC'd. This should only be set if
+	// you know that a GC'd node can never come back
+	GCVolumesOnNodeGC bool `hcl:"gc_volumes_on_node_gc"`
+
 	// NoHostUUID disables using the host's UUID and will force generation of a
 	// random UUID.
 	NoHostUUID *bool `hcl:"no_host_uuid"`
@@ -414,6 +436,13 @@ type ClientConfig struct {
 
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+
+	// NodeMaxAllocs sets the maximum number of allocations per node
+	// Defaults to 0 and ignored if unset.
+	NodeMaxAllocs int `hcl:"node_max_allocs"`
+
+	// LogFile is used by MonitorExport to stream a client's log file
+	LogFile string `hcl:"log_file"`
 }
 
 func (c *ClientConfig) Copy() *ClientConfig {
@@ -508,6 +537,11 @@ type ServerConfig struct {
 	// BootstrapExpect tries to automatically bootstrap the Nomad cluster,
 	// by withholding peers until enough servers join.
 	BootstrapExpect int `hcl:"bootstrap_expect"`
+
+	// ClientIntroduction is the configuration block that configures the client
+	// introduction feature. This feature allows servers to validate requests
+	// and perform enforcement actions on client registrations.
+	ClientIntroduction *ClientIntroduction `hcl:"client_introduction"`
 
 	// DataDir is the directory to store our state in
 	DataDir string `hcl:"data_dir"`
@@ -728,6 +762,9 @@ type ServerConfig struct {
 	// JobMaxPriority is an upper bound on the Job priority.
 	JobMaxPriority *int `hcl:"job_max_priority"`
 
+	// JobMaxCount is an upper bound on the number of instances in a Job.
+	JobMaxCount *int `hcl:"job_max_count"`
+
 	// JobMaxSourceSize limits the maximum size of a jobs source hcl/json
 	// before being discarded automatically. If unset, the maximum size defaults
 	// to 1 MB. If the value is zero, no job sources will be stored.
@@ -746,6 +783,9 @@ type ServerConfig struct {
 	// expected to complete before the server is considered healthy. Without
 	// this, the server can hang indefinitely waiting for these.
 	StartTimeout string `hcl:"start_timeout"`
+
+	// LogFile is used by MonitorExport to stream a server's log file
+	LogFile string `hcl:"log_file"`
 }
 
 func (s *ServerConfig) Copy() *ServerConfig {
@@ -774,7 +814,9 @@ func (s *ServerConfig) Copy() *ServerConfig {
 	ns.RaftTrailingLogs = pointer.Copy(s.RaftTrailingLogs)
 	ns.JobDefaultPriority = pointer.Copy(s.JobDefaultPriority)
 	ns.JobMaxPriority = pointer.Copy(s.JobMaxPriority)
+	ns.JobMaxCount = pointer.Copy(s.JobMaxCount)
 	ns.JobTrackedVersions = pointer.Copy(s.JobTrackedVersions)
+	ns.ClientIntroduction = s.ClientIntroduction.Copy()
 	return &ns
 }
 
@@ -1005,6 +1047,110 @@ func (s *Search) Copy() *Search {
 
 	ns := *s
 	return &ns
+}
+
+// ClientIntroduction is the server configuration block that configures the
+// client introduction feature. This feature allows servers to validate requests
+// and perform enforcement actions on client registrations.
+type ClientIntroduction struct {
+
+	// Enforcement is the level of enforcement that the server will apply to
+	// client registrations. This can be one of "none", "warn", or "strict"
+	// which is also declared within ClientIntroductionEnforcementValues.
+	Enforcement string `hcl:"enforcement"`
+
+	// DefaultIdentityTTL is the TTL assigned to client introduction identities
+	// that are generated by a caller who did not provide a TTL.
+	DefaultIdentityTTL    time.Duration
+	DefaultIdentityTTLHCL string `hcl:"default_identity_ttl" json:"-"`
+
+	// MaxIdentityTTL is the maximum TTL that can be assigned to a client
+	// introduction identity. This is used to validate the TTL provided by
+	// caller and allows operators a method to limit TTL requests.
+	MaxIdentityTTL    time.Duration
+	MaxIdentityTTLHCL string `hcl:"max_identity_ttl" json:"-"`
+
+	// ExtraKeysHCL is used by hcl to surface unexpected keys within the
+	// configuration block. Without this, unexpected keys will be silently
+	// ignored.
+	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+}
+
+// ClientIntroductionEnforcementValues are the valid values for the client
+// introduction enforcement setting.
+var ClientIntroductionEnforcementValues = []string{"none", "warn", "strict"}
+
+// Copy creates a copy of the ClientIntroduction configuration block. All fields
+// are copied, including the ExtraKeysHCL field which is used by HCL to surface
+// unexpected keys within the configuration block.
+func (c *ClientIntroduction) Copy() *ClientIntroduction {
+	if c == nil {
+		return nil
+	}
+
+	newCI := *c
+	newCI.ExtraKeysHCL = slices.Clone(c.ExtraKeysHCL)
+
+	return &newCI
+}
+
+// Merge performs a merge of two ClientIntroduction configuration blocks
+// overwriting the values in the first block with the values in the block passed
+// into the function.
+func (c *ClientIntroduction) Merge(z *ClientIntroduction) *ClientIntroduction {
+	if c == nil {
+		return z
+	}
+
+	result := *c
+
+	if z == nil {
+		return &result
+	}
+
+	if z.Enforcement != "" {
+		result.Enforcement = z.Enforcement
+	}
+	if z.DefaultIdentityTTL > 0 {
+		result.DefaultIdentityTTL = z.DefaultIdentityTTL
+	}
+	if z.MaxIdentityTTL > 0 {
+		result.MaxIdentityTTL = z.MaxIdentityTTL
+	}
+	if len(z.ExtraKeysHCL) > 0 {
+		result.ExtraKeysHCL = append(result.ExtraKeysHCL, z.ExtraKeysHCL...)
+	}
+
+	return &result
+}
+
+// Validate performs validation on the ClientIntroduction configuration block to
+// ensure the values are set correctly for use by the server.
+func (c *ClientIntroduction) Validate() error {
+
+	if c == nil {
+		return nil
+	}
+
+	if c.Enforcement == "" {
+		return errors.New("client_introduction.enforcement must be set")
+	}
+	if !slices.Contains(ClientIntroductionEnforcementValues, c.Enforcement) {
+		return fmt.Errorf("client_introduction.enforcement must be one of %v",
+			ClientIntroductionEnforcementValues)
+	}
+
+	if c.DefaultIdentityTTL < 1 {
+		return errors.New("client_introduction.default_identity_ttl must be greater one")
+	}
+	if c.MaxIdentityTTL < 1 {
+		return errors.New("client_introduction.max_identity_ttl must be greater one")
+	}
+	if c.MaxIdentityTTL < c.DefaultIdentityTTL {
+		return errors.New("client_introduction.max_identity_ttl must be greater than default_identity_ttl")
+	}
+
+	return nil
 }
 
 // ServerJoin is used in both clients and servers to bootstrap connections to
@@ -1260,6 +1406,60 @@ func (t *Telemetry) Validate() error {
 	// Ensure the in-memory durations do not conflict.
 	if t.inMemoryCollectionInterval > t.inMemoryRetentionPeriod {
 		return errors.New("telemetry in-memory collection interval cannot be greater than retention period")
+	}
+
+	return nil
+}
+
+// Eventlog is the configuration for the Windows Eventlog
+type Eventlog struct {
+	// Enabled controls if Nomad agent logs are sent to the
+	// Windows eventlog.
+	Enabled bool `hcl:"enabled"`
+	// Level of logs to send to eventlog. May be set to higher
+	// severity than LogLevel but lower level will be ignored.
+	Level string `hcl:"level"`
+}
+
+// Copy is used to copy the Eventlog configuration
+func (e *Eventlog) Copy() *Eventlog {
+	return &Eventlog{
+		Enabled: e.Enabled,
+		Level:   e.Level,
+	}
+}
+
+// Merge is used to merge Eventlog configurations
+func (e *Eventlog) Merge(b *Eventlog) *Eventlog {
+	if e == nil {
+		return b
+	}
+
+	result := *e
+
+	if b == nil {
+		return &result
+	}
+
+	if b.Enabled {
+		result.Enabled = b.Enabled
+	}
+
+	if b.Level != "" {
+		result.Level = b.Level
+	}
+
+	return &result
+}
+
+// Validate validates the eventlog configuration
+func (e *Eventlog) Validate() error {
+	if e == nil {
+		return nil
+	}
+
+	if winsvc.EventlogLevelFromString(e.Level) == winsvc.EVENTLOG_LEVEL_UNKNOWN {
+		return errors.New("eventlog.level must be one of INFO, WARN, or ERROR")
 	}
 
 	return nil
@@ -1598,6 +1798,10 @@ func DefaultConfig() *Config {
 			collectionInterval:           1 * time.Second,
 			DisableAllocationHookMetrics: pointer.Of(false),
 		},
+		Eventlog: &Eventlog{
+			Enabled: false,
+			Level:   "error",
+		},
 		TLSConfig:          &config.TLSConfig{},
 		Sentinel:           &config.SentinelConfig{},
 		Version:            version.GetVersion(),
@@ -1708,6 +1912,13 @@ func (c *Config) Merge(b *Config) *Config {
 		result.Telemetry = &telemetry
 	} else if b.Telemetry != nil {
 		result.Telemetry = result.Telemetry.Merge(b.Telemetry)
+	}
+
+	// Apply the eventlog config
+	if result.Eventlog == nil && b.Eventlog != nil {
+		result.Eventlog = b.Eventlog.Copy()
+	} else if b.Eventlog != nil {
+		result.Eventlog = result.Eventlog.Merge(b.Eventlog)
 	}
 
 	// Apply the Reporting Config
@@ -1995,6 +2206,7 @@ func (c *Config) normalizeAddrs() error {
 		}
 		c.BindAddr = ipStr
 	}
+	c.BindAddr = ipaddr.NormalizeAddr(c.BindAddr)
 
 	httpAddrs, err := normalizeMultipleBind(c.Addresses.HTTP, c.BindAddr)
 	if err != nil {
@@ -2015,9 +2227,12 @@ func (c *Config) normalizeAddrs() error {
 	c.Addresses.Serf = addr
 
 	c.normalizedAddrs = &NormalizedAddrs{
-		HTTP: joinHostPorts(httpAddrs, strconv.Itoa(c.Ports.HTTP)),
-		RPC:  net.JoinHostPort(c.Addresses.RPC, strconv.Itoa(c.Ports.RPC)),
-		Serf: net.JoinHostPort(c.Addresses.Serf, strconv.Itoa(c.Ports.Serf)),
+		RPC:  normalizeAddrWithPort(c.Addresses.RPC, c.Ports.RPC),
+		Serf: normalizeAddrWithPort(c.Addresses.Serf, c.Ports.Serf),
+	}
+	c.normalizedAddrs.HTTP = make([]string, len(httpAddrs))
+	for i, addr := range httpAddrs {
+		c.normalizedAddrs.HTTP[i] = normalizeAddrWithPort(addr, c.Ports.HTTP)
 	}
 
 	addr, err = normalizeAdvertise(c.AdvertiseAddrs.HTTP, httpAddrs[0], c.Ports.HTTP, c.DevMode)
@@ -2100,6 +2315,12 @@ func parseMultipleIPTemplate(ipTmpl string) ([]string, error) {
 	return deduplicateAddrs(ips), nil
 }
 
+// normalizeAddrWithPort assumes that addr does not contain a port,
+// noramlizes it per ipv6 RFC-5942 §4, and appends ":{port}".
+func normalizeAddrWithPort(addr string, port int) string {
+	return ipaddr.NormalizeAddr(net.JoinHostPort(addr, strconv.Itoa(port)))
+}
+
 // normalizeBind returns a normalized bind address.
 //
 // If addr is set it is used, if not the default bind address is used.
@@ -2107,7 +2328,8 @@ func normalizeBind(addr, bind string) (string, error) {
 	if addr == "" {
 		return bind, nil
 	}
-	return listenerutil.ParseSingleIPTemplate(addr)
+	addr, err := listenerutil.ParseSingleIPTemplate(addr)
+	return ipaddr.NormalizeAddr(addr), err
 }
 
 // normalizeMultipleBind returns normalized bind addresses.
@@ -2117,7 +2339,11 @@ func normalizeMultipleBind(addr, bind string) ([]string, error) {
 	if addr == "" {
 		return []string{bind}, nil
 	}
-	return parseMultipleIPTemplate(addr)
+	addrs, err := parseMultipleIPTemplate(addr)
+	for i, addr := range addrs {
+		addrs[i] = ipaddr.NormalizeAddr(addr)
+	}
+	return addrs, err
 }
 
 // normalizeAdvertise returns a normalized advertise address.
@@ -2147,10 +2373,10 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 			}
 
 			// missing port, append the default
-			return net.JoinHostPort(addr, strconv.Itoa(defport)), nil
+			return normalizeAddrWithPort(addr, defport), nil
 		}
 
-		return addr, nil
+		return ipaddr.NormalizeAddr(addr), nil
 	}
 
 	// Fallback to bind address first, and then try resolving the local hostname
@@ -2162,12 +2388,12 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 	// Return the first non-localhost unicast address
 	for _, ip := range ips {
 		if ip.IsLinkLocalUnicast() || ip.IsGlobalUnicast() {
-			return net.JoinHostPort(ip.String(), strconv.Itoa(defport)), nil
+			return normalizeAddrWithPort(ip.String(), defport), nil
 		}
 		if ip.IsLoopback() {
 			if dev {
 				// loopback is fine for dev mode
-				return net.JoinHostPort(ip.String(), strconv.Itoa(defport)), nil
+				return normalizeAddrWithPort(ip.String(), defport), nil
 			}
 			return "", fmt.Errorf("Defaulting advertise to localhost is unsafe, please set advertise manually")
 		}
@@ -2178,7 +2404,7 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 	if err != nil {
 		return "", fmt.Errorf("Unable to parse default advertise address: %v", err)
 	}
-	return net.JoinHostPort(addr, strconv.Itoa(defport)), nil
+	return normalizeAddrWithPort(addr, defport), nil
 }
 
 // isMissingPort returns true if an error is a "missing port" error from
@@ -2283,6 +2509,9 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 	}
 	if b.JobMaxPriority != nil {
 		result.JobMaxPriority = pointer.Of(*b.JobMaxPriority)
+	}
+	if b.JobMaxCount != nil {
+		result.JobMaxCount = pointer.Of(*b.JobMaxCount)
 	}
 	if b.EvalGCThreshold != "" {
 		result.EvalGCThreshold = b.EvalGCThreshold
@@ -2431,6 +2660,11 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 		result.StartTimeout = b.StartTimeout
 	}
 
+	// Merge the client introduction config.
+	if b.ClientIntroduction != nil {
+		result.ClientIntroduction = result.ClientIntroduction.Merge(b.ClientIntroduction)
+	}
+
 	// Add the schedulers
 	result.EnabledSchedulers = append(result.EnabledSchedulers, b.EnabledSchedulers...)
 
@@ -2448,8 +2682,8 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 }
 
 // Merge is used to merge two client configs together
-func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
-	result := *a
+func (c *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
+	result := *c
 
 	if b.Enabled {
 		result.Enabled = true
@@ -2468,6 +2702,9 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	}
 	if b.HostVolumePluginDir != "" {
 		result.HostVolumePluginDir = b.HostVolumePluginDir
+	}
+	if b.CommonPluginDir != "" {
+		result.CommonPluginDir = b.CommonPluginDir
 	}
 	if b.NodeClass != "" {
 		result.NodeClass = b.NodeClass
@@ -2543,6 +2780,9 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	if b.GCMaxAllocs != 0 {
 		result.GCMaxAllocs = b.GCMaxAllocs
 	}
+	if b.GCVolumesOnNodeGC {
+		result.GCVolumesOnNodeGC = b.GCVolumesOnNodeGC
+	}
 	// NoHostUUID defaults to true, merge if false
 	if b.NoHostUUID != nil {
 		result.NoHostUUID = b.NoHostUUID
@@ -2587,10 +2827,10 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.ServerJoin = result.ServerJoin.Merge(b.ServerJoin)
 	}
 
-	if len(a.HostVolumes) == 0 && len(b.HostVolumes) != 0 {
+	if len(c.HostVolumes) == 0 && len(b.HostVolumes) != 0 {
 		result.HostVolumes = structs.CopySliceClientHostVolumeConfig(b.HostVolumes)
 	} else if len(b.HostVolumes) != 0 {
-		result.HostVolumes = structs.HostVolumeSliceMerge(a.HostVolumes, b.HostVolumes)
+		result.HostVolumes = structs.HostVolumeSliceMerge(c.HostVolumes, b.HostVolumes)
 	}
 
 	if b.CNIPath != "" {
@@ -2612,7 +2852,7 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.BridgeNetworkHairpinMode = true
 	}
 
-	result.HostNetworks = a.HostNetworks
+	result.HostNetworks = c.HostNetworks
 
 	if len(b.HostNetworks) != 0 {
 		result.HostNetworks = append(result.HostNetworks, b.HostNetworks...)
@@ -2632,9 +2872,16 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.CgroupParent = b.CgroupParent
 	}
 
-	result.Artifact = a.Artifact.Merge(b.Artifact)
-	result.Drain = a.Drain.Merge(b.Drain)
-	result.Users = a.Users.Merge(b.Users)
+	result.Artifact = c.Artifact.Merge(b.Artifact)
+	result.Drain = c.Drain.Merge(b.Drain)
+	result.Users = c.Users.Merge(b.Users)
+
+	if b.NodeMaxAllocs != 0 {
+		result.NodeMaxAllocs = b.NodeMaxAllocs
+	}
+	if b.IntroToken != "" {
+		result.IntroToken = b.IntroToken
+	}
 
 	return &result
 }
@@ -2758,8 +3005,8 @@ func (t *Telemetry) Merge(b *Telemetry) *Telemetry {
 }
 
 // Merge is used to merge two port configurations.
-func (a *Ports) Merge(b *Ports) *Ports {
-	result := *a
+func (p *Ports) Merge(b *Ports) *Ports {
+	result := *p
 
 	if b.HTTP != 0 {
 		result.HTTP = b.HTTP
@@ -2921,17 +3168,6 @@ func LoadConfigDir(dir string) (*Config, error) {
 	}
 
 	return result, nil
-}
-
-// joinHostPorts joins every addr in addrs with the specified port
-func joinHostPorts(addrs []string, port string) []string {
-	localAddrs := make([]string, len(addrs))
-	for i, k := range addrs {
-		localAddrs[i] = net.JoinHostPort(k, port)
-
-	}
-
-	return localAddrs
 }
 
 // isTemporaryFile returns true or false depending on whether the

@@ -603,12 +603,13 @@ func (s *HTTPServer) jobUpdate(resp http.ResponseWriter, req *http.Request, jobI
 		Job:        sJob,
 		Submission: submission,
 
-		EnforceIndex:   args.EnforceIndex,
-		JobModifyIndex: args.JobModifyIndex,
-		PolicyOverride: args.PolicyOverride,
-		PreserveCounts: args.PreserveCounts,
-		EvalPriority:   args.EvalPriority,
-		WriteRequest:   *writeReq,
+		EnforceIndex:      args.EnforceIndex,
+		JobModifyIndex:    args.JobModifyIndex,
+		PolicyOverride:    args.PolicyOverride,
+		PreserveCounts:    args.PreserveCounts,
+		PreserveResources: args.PreserveResources,
+		EvalPriority:      args.EvalPriority,
+		WriteRequest:      *writeReq,
 	}
 
 	var out structs.JobRegisterResponse
@@ -1466,6 +1467,19 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		}
 	}
 
+	if len(apiTask.Secrets) > 0 {
+		structsTask.Secrets = []*structs.Secret{}
+		for _, s := range apiTask.Secrets {
+			structsTask.Secrets = append(structsTask.Secrets, &structs.Secret{
+				Name:     s.Name,
+				Provider: s.Provider,
+				Path:     s.Path,
+				Config:   s.Config,
+				Env:      s.Env,
+			})
+		}
+	}
+
 	if apiTask.Consul != nil {
 		structsTask.Consul = apiConsulToStructs(apiTask.Consul)
 	}
@@ -1481,6 +1495,7 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 					ChangeMode:    *template.ChangeMode,
 					ChangeSignal:  *template.ChangeSignal,
 					ChangeScript:  apiChangeScriptToStructsChangeScript(template.ChangeScript),
+					Once:          *template.Once,
 					Splay:         *template.Splay,
 					Perms:         *template.Perms,
 					Uid:           template.Uid,
@@ -1712,6 +1727,7 @@ func ApiServicesToStructs(in []*api.Service, group bool) []*structs.Service {
 			OnUpdate:          s.OnUpdate,
 			Provider:          s.Provider,
 			Cluster:           s.Cluster,
+			Kind:              s.Kind,
 		}
 
 		if l := len(s.Checks); l != 0 {
@@ -2117,6 +2133,19 @@ func apiConnectSidecarTaskToStructs(in *api.SidecarTask) *structs.SidecarTask {
 		return nil
 	}
 
+	var identities []*structs.WorkloadIdentity
+
+	if ids := in.Identities; len(ids) > 0 {
+		identities = make([]*structs.WorkloadIdentity, 0, len(ids))
+		for _, id := range ids {
+			if id == nil {
+				continue
+			}
+
+			identities = append(identities, apiWorkloadIdentityToStructs(id))
+		}
+	}
+
 	return &structs.SidecarTask{
 		Name:          in.Name,
 		Driver:        in.Driver,
@@ -2130,6 +2159,7 @@ func apiConnectSidecarTaskToStructs(in *api.SidecarTask) *structs.SidecarTask {
 		KillTimeout:   in.KillTimeout,
 		LogConfig:     apiLogConfigToStructs(in.LogConfig),
 		VolumeMounts:  apiVolumeMountsToStructs(in.VolumeMounts),
+		Identities:    identities,
 	}
 }
 

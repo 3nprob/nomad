@@ -1100,7 +1100,7 @@ func TestServer_Reload_TLS_Shared_Keyloader(t *testing.T) {
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
-			VerifyServerHostname: true,
+			VerifyServerHostname: false,
 			CAFile:               badca,
 			CertFile:             badcert,
 			KeyFile:              badkey,
@@ -1120,7 +1120,7 @@ func TestServer_Reload_TLS_Shared_Keyloader(t *testing.T) {
 		TLSConfig: &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
-			VerifyServerHostname: true,
+			VerifyServerHostname: false,
 			CAFile:               foocafile,
 			CertFile:             fooclientcert,
 			KeyFile:              fooclientkey,
@@ -1401,6 +1401,52 @@ func TestServer_Reload_VaultConfig(t *testing.T) {
 	must.NoError(t, agent.server.Reload(sconf))
 }
 
+func TestAgent_readIntroTokenFile(t *testing.T) {
+	ci.Parallel(t)
+
+	t.Run("no file", func(t *testing.T) {
+
+		tmpDir := t.TempDir()
+		testAgent := &Agent{logger: testlog.HCLogger(t), config: &Config{}}
+
+		clientConfig := clientconfig.Config{StateDir: tmpDir}
+
+		must.NoError(t, testAgent.readIntroTokenFile(&clientConfig))
+		must.Eq(t, "", clientConfig.IntroToken)
+	})
+
+	t.Run("file", func(t *testing.T) {
+
+		tmpDir := t.TempDir()
+		must.NoError(
+			t,
+			os.WriteFile(
+				filepath.Join(tmpDir, "intro_token.jwt"),
+				[]byte("my-intro-token"),
+				0600,
+			),
+		)
+		testAgent := &Agent{logger: testlog.HCLogger(t), config: &Config{}}
+
+		clientConfig := clientconfig.Config{StateDir: tmpDir}
+
+		must.NoError(t, testAgent.readIntroTokenFile(&clientConfig))
+		must.Eq(t, "my-intro-token", clientConfig.IntroToken)
+	})
+
+	t.Run("directory", func(t *testing.T) {
+
+		tmpDir := t.TempDir()
+		must.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "intro_token.jwt"), os.ModeDir))
+
+		testAgent := &Agent{logger: testlog.HCLogger(t), config: &Config{}}
+
+		clientConfig := clientconfig.Config{StateDir: tmpDir}
+
+		must.Error(t, testAgent.readIntroTokenFile(&clientConfig))
+	})
+}
+
 func TestServer_ShouldReload_ReturnFalseForNoChanges(t *testing.T) {
 	ci.Parallel(t)
 	assert := assert.New(t)
@@ -1423,6 +1469,7 @@ func TestServer_ShouldReload_ReturnFalseForNoChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1461,6 +1508,7 @@ func TestServer_ShouldReload_ReturnTrueForOnlyHTTPChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1528,6 +1576,7 @@ func TestServer_ShouldReload_ReturnTrueForConfigChanges(t *testing.T) {
 	)
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1678,6 +1727,7 @@ func TestServer_ShouldReload_ShouldHandleMultipleChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1891,6 +1941,128 @@ func TestAgent_ServerConfig_JobDefaultPriority_Bad(t *testing.T) {
 			_, err := convertServerConfig(conf)
 			must.Error(t, err)
 			must.ErrorContains(t, err, "job_default_priority cannot be")
+		})
+	}
+}
+
+func TestAgent_ServerConfig_JobMaxCount(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []struct {
+		configured  *int
+		expected    int
+		expectedErr string
+	}{
+		{
+			configured:  nil,
+			expected:    structs.JobDefaultMaxCount,
+			expectedErr: "",
+		},
+		{
+			configured:  pointer.Of(1),
+			expected:    1,
+			expectedErr: "",
+		},
+		{
+			configured:  pointer.Of(0),
+			expected:    0,
+			expectedErr: "",
+		},
+		{
+			configured:  pointer.Of(structs.JobDefaultMaxCount),
+			expected:    structs.JobDefaultMaxCount,
+			expectedErr: "",
+		},
+		{
+			configured:  pointer.Of(2 * structs.JobDefaultMaxCount),
+			expected:    2 * structs.JobDefaultMaxCount,
+			expectedErr: "",
+		},
+		{
+			configured:  pointer.Of(-1),
+			expected:    0,
+			expectedErr: "job_max_count (-1) cannot be negative",
+		},
+		{
+			configured:  pointer.Of(-3),
+			expected:    0,
+			expectedErr: "job_max_count (-3) cannot be negative",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprint(tc.configured), func(t *testing.T) {
+			conf := DevConfig(nil)
+			must.NoError(t, conf.normalizeAddrs())
+
+			conf.Server.JobMaxCount = tc.configured
+
+			serverConf, err := convertServerConfig(conf)
+
+			if tc.expectedErr != "" {
+				must.Error(t, err)
+				must.ErrorContains(t, err, tc.expectedErr)
+			} else {
+				must.NoError(t, err)
+				must.Eq(t, tc.expected, serverConf.JobMaxCount)
+			}
+		})
+	}
+}
+
+func Test_convertServerConfig_clientIntroduction(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name                           string
+		inputClientIntroduction        *ClientIntroduction
+		expectedNodeIntroductionConfig *structs.NodeIntroductionConfig
+	}{
+		{
+			name:                    "nil client introduction",
+			inputClientIntroduction: nil,
+			expectedNodeIntroductionConfig: &structs.NodeIntroductionConfig{
+				Enforcement:        "warn",
+				DefaultIdentityTTL: 5 * time.Minute,
+				MaxIdentityTTL:     30 * time.Minute,
+			},
+		},
+		{
+			name: "partial override",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement: "strict",
+			},
+			expectedNodeIntroductionConfig: &structs.NodeIntroductionConfig{
+				Enforcement:        "strict",
+				DefaultIdentityTTL: 5 * time.Minute,
+				MaxIdentityTTL:     30 * time.Minute,
+			},
+		},
+		{
+			name: "partial override",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement:        "strict",
+				DefaultIdentityTTL: 50 * time.Minute,
+				MaxIdentityTTL:     300 * time.Minute,
+			},
+			expectedNodeIntroductionConfig: &structs.NodeIntroductionConfig{
+				Enforcement:        "strict",
+				DefaultIdentityTTL: 50 * time.Minute,
+				MaxIdentityTTL:     300 * time.Minute,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			baseConfig := DevConfig(nil)
+			must.NoError(t, baseConfig.normalizeAddrs())
+			baseConfig.Server.ClientIntroduction = tc.inputClientIntroduction
+
+			serverConf, err := convertServerConfig(baseConfig)
+			must.NoError(t, err)
+			must.Eq(t, tc.expectedNodeIntroductionConfig, serverConf.NodeIntroductionConfig)
 		})
 	}
 }

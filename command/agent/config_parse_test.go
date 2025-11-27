@@ -88,6 +88,7 @@ var basicConfig = &Config{
 		GCDiskUsageThreshold:  82,
 		GCInodeUsageThreshold: 91,
 		GCMaxAllocs:           50,
+		GCVolumesOnNodeGC:     true,
 		NoHostUUID:            pointer.Of(false),
 		DisableRemoteExec:     true,
 		HostVolumes: []*structs.ClientHostVolumeConfig{
@@ -158,7 +159,15 @@ var basicConfig = &Config{
 		LicensePath:        "/tmp/nomad.hclic",
 		JobDefaultPriority: pointer.Of(100),
 		JobMaxPriority:     pointer.Of(200),
+		JobMaxCount:        pointer.Of(1000),
 		StartTimeout:       "1m",
+		ClientIntroduction: &ClientIntroduction{
+			Enforcement:           "warn",
+			DefaultIdentityTTLHCL: "5m",
+			DefaultIdentityTTL:    5 * time.Minute,
+			MaxIdentityTTLHCL:     "30m",
+			MaxIdentityTTL:        30 * time.Minute,
+		},
 	},
 	ACL: &ACLConfig{
 		Enabled:                  true,
@@ -619,6 +628,9 @@ func (c *Config) addDefaults() {
 	if c.Server.PlanRejectionTracker == nil {
 		c.Server.PlanRejectionTracker = &PlanRejectionTracker{}
 	}
+	if c.Server.ClientIntroduction == nil {
+		c.Server.ClientIntroduction = &ClientIntroduction{}
+	}
 	if c.Reporting == nil {
 		c.Reporting = &config.ReportingConfig{
 			License: &config.LicenseReportingConfig{
@@ -696,7 +708,10 @@ var sample0 = &Config{
 		RPC:  "host.example.com",
 		Serf: "host.example.com",
 	},
-	Client: &ClientConfig{ServerJoin: &ServerJoin{}},
+	Client: &ClientConfig{
+		ServerJoin:    &ServerJoin{},
+		NodeMaxAllocs: 5,
+	},
 	Server: &ServerConfig{
 		Enabled:         true,
 		BootstrapExpect: 3,
@@ -708,6 +723,7 @@ var sample0 = &Config{
 			NodeWindow:    31 * time.Minute,
 			NodeWindowHCL: "31m",
 		},
+		ClientIntroduction: &ClientIntroduction{},
 	},
 	ACL: &ACLConfig{
 		Enabled: true,
@@ -817,6 +833,7 @@ var sample1 = &Config{
 			NodeWindow:    31 * time.Minute,
 			NodeWindowHCL: "31m",
 		},
+		ClientIntroduction: &ClientIntroduction{},
 	},
 	ACL: &ACLConfig{
 		Enabled: true,
@@ -1067,7 +1084,7 @@ func TestConfig_MultipleVault(t *testing.T) {
 
 			must.Eq(t, "alternate", cfg.Vaults[1].Name)
 			must.True(t, *cfg.Vaults[1].Enabled)
-			must.Eq(t, "127.0.0.1:9501", cfg.Vaults[1].Addr)
+			must.Eq(t, "[::1f]:9501", cfg.Vaults[1].Addr)
 
 			must.Eq(t, "other", cfg.Vaults[2].Name)
 			must.Nil(t, cfg.Vaults[2].Enabled)
@@ -1119,7 +1136,7 @@ func TestConfig_MultipleConsul(t *testing.T) {
 			must.Eq(t, "abracadabra", defaultConsul.Token)
 
 			must.Eq(t, "alternate", cfg.Consuls[1].Name)
-			must.Eq(t, "127.0.0.2:8501", cfg.Consuls[1].Addr)
+			must.Eq(t, "[::1f]:8501", cfg.Consuls[1].Addr)
 			must.Eq(t, "xyzzy", cfg.Consuls[1].Token)
 
 			must.Eq(t, "other", cfg.Consuls[2].Name)

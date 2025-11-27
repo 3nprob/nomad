@@ -5,6 +5,11 @@ description: |-
   Configure Nomad agent server mode in the `server` block of a Nomad agent configuration. Server mode lets the agent participate in scheduling decisions, register with service discovery, and handle join failures. Configure bootstrapping, authoritative region, redundancy zone, data directory, Nomad cluster behavior, client heartbeat period, schedulers, garbage collection, Raft and Raft's BoltDB store, OIDC for workload identity, leader plan rejection, as well as job priority, job source content size, and tracked job versions.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # `server` Block in Agent Configuration
 
 <Placement groups={['server']} />
@@ -58,9 +63,10 @@ server {
 - `enabled` `(bool: false)` - Specifies if this agent should run in server mode.
   All other server options depend on this value being set.
 
-- `enabled_schedulers` `(array<string>: [all])` - Specifies which sub-schedulers
-  this server will handle. This can be used to restrict the evaluations that
-  worker threads will dequeue for processing.
+- `enabled_schedulers` `(array<string>: [])` - Specifies which sub-schedulers
+  this server  handles. Use this to restrict the evaluations that worker threads
+  dequeue for processing. Nomad treats the empty default value as `["service",
+  "batch", "system", "sysbatch"]`.
 
 - `enable_event_broker` `(bool: true)` - Specifies if this server will generate
   events for its event stream.
@@ -102,18 +108,29 @@ server {
 - `eval_gc_threshold` `(string: "1h")` - Specifies the minimum time an
   evaluation must be in the terminal state before it is eligible for garbage
   collection. This is specified using a label suffix like "30s" or "1h". Note
-  that batch job evaluations are controlled via `batch_eval_gc_threshold`.
+  that batch job evaluations are controlled via
+  `batch_eval_gc_threshold`. Nomad garbage collects allocations with their
+  evaluations, so this field also controls server garbage collection of
+  allocations. Evaluations with non-terminal allocations cannot be garbage
+  collected.
 
 - `batch_eval_gc_threshold` `(string: "24h")` - Specifies the minimum time an
   evaluation stemming from a batch job must be in the terminal state before it is
   eligible for garbage collection. This is specified using a label suffix like
   "30s" or "1h". Note that the threshold is a necessary but insufficient condition
   for collection, and the most recent evaluation won't be garbage collected even if
-  it breaches the threshold.
+  it breaches the threshold. Allocations are garbage collected with their
+  evaluations, so this field also controls server garbage collection of
+  allocations. Evaluations with non-terminal allocations cannot be garbage
+  collected.
 
 - `deployment_gc_threshold` `(string: "1h")` - Specifies the minimum time a
   deployment must be in the terminal state before it is eligible for garbage
   collection. This is specified using a label suffix like "30s" or "1h".
+
+- `client_introduction` <code>([ClientIntroduction](#client_introduction-parameters))</code> -
+  Configuration for how the Nomad server handles client introduction
+  requests.
 
 - `csi_volume_claim_gc_interval` `(string: "5m")` - Specifies the interval
   between CSI volume claim garbage collections.
@@ -207,7 +224,7 @@ server {
   when raising this value is that during network partitions or other events
   (server crash) where a leader is lost, Nomad will not elect a new leader for
   a longer period of time than the default. The [`nomad.nomad.leader.barrier` and
-  `nomad.raft.leader.lastContact` metrics](/nomad/docs/operations/metrics-reference) are a good
+  `nomad.raft.leader.lastContact` metrics](/nomad/docs/reference/metrics) are a good
   indicator of how often leader elections occur and Raft latency.
 
 - `raft_snapshot_threshold` `(int: "8192")` - Specifies the minimum number of
@@ -231,7 +248,7 @@ server {
 
 - `redundancy_zone` `(string: "")` - (Enterprise-only) Specifies the redundancy
   zone that this server will be a part of for Autopilot management. For more
-  information, refer to the [Autopilot Guide](/nomad/tutorials/manage-clusters/autopilot).
+  information, refer to the [Autopilot Guide](/nomad/docs/manage/autopilot).
 
 - `rejoin_after_leave` `(bool: false)` - Specifies if Nomad will ignore a
   previous leave and attempt to rejoin the cluster when starting. By default,
@@ -266,7 +283,7 @@ server {
 
 - `upgrade_version` `(string: "")` - A custom version of the format X.Y.Z to use
   in place of the Nomad version when custom upgrades are enabled in Autopilot.
-  For more information, refer to the [Autopilot Guide](/nomad/tutorials/manage-clusters/autopilot).
+  For more information, refer to the [Autopilot Guide](/nomad/docs/manage/autopilot).
 
 - `search` <code>([search][search]: nil)</code> - Specifies configuration parameters
   for the Nomad search API.
@@ -276,6 +293,14 @@ server {
 
 - `job_default_priority` `(int: 50)` - Specifies the default priority assigned to a job.
    A valid value must be between `50` and `job_max_priority`.
+
+- `job_max_count` `(int: 50000)` - Specifies the maximum number of allocations
+   for a job, as represented by the sum of its task group `count` fields. Jobs
+   of type `system` ignore this value. The child jobs of dispatched batch jobs
+   or periodic jobs are counted separately from their parent job. This value
+   must be non-negative. If set to 0, no limit is enforced. This value is enforced
+   at the time the job is submitted or scaled, and updating the value will not
+   impact existing jobs.
 
 - `job_max_source_size` `(string: "1M")` - Specifies the size limit of the associated
   job source content when registering a job. Note this is not a limit on the actual
@@ -322,6 +347,37 @@ server {
   format](/nomad/docs/configuration/server_join#server-address-format)
   section for more information on the format of the string. This field is
   deprecated in favor of the [server_join block][server-join].
+
+### `client_introduction` Parameters
+
+The `client_introduction` block controls how the Nomad server should generate
+introduction tokens for new clients and what enforcement to apply when new
+clients attempt to register with the server.
+
+- `enforcement` `(string: "warn")` - Specifics how the server handles new client
+  registration requests. The valid options are `none`, `warn`, and `strict`.
+
+  - `none`: The server does not enforce any client registration behaviour.
+  - `warn`: The server logs a warning message and emits a telemetry metric when
+    a client attempts to register without an introduction token. However, the
+    server does allow the registration to proceed.
+  - `strict`: The server rejects any client registration attempts that do not
+    include a valid introduction token. The server also logs a warning message
+    and emits a telemetry  metric.
+
+- `default_identity_ttl` `(string: "5m")` - The default TTL assigned to
+  generated client introduction tokens when the caller does not specify a TTL.
+  Specify this value with a label suffix like "30s" or "1h". Must be less
+  than `max_identity_ttl`.
+
+- `max_identity_ttl` `(string: "30m")` - The maximum TTL that can be requested
+  by a caller when generating client introduction tokens. Specify this value
+  with a label suffix like "30s" or "1h". Must be greater than
+  `default_identity_ttl`.
+
+Refer to the [Client introduction section][monitoring_nomad_client_introduction]
+of the Monitor Nomad guide for details on the client introduction metric that is
+emitted.
 
 ### `plan_rejection_tracker` Parameters
 
@@ -382,7 +438,7 @@ server {
 
 The Nomad servers can automatically bootstrap if Consul is configured. For a
 more detailed explanation, refer to the
-[automatic Nomad bootstrapping documentation](/nomad/tutorials/manage-clusters/clustering).
+[automatic Nomad bootstrapping documentation](/nomad/docs/deploy/clusters/connect-nodes).
 
 ### Restricting Schedulers
 
@@ -518,18 +574,19 @@ election was due to a datacenter-wide failure affecting Clients, it will be 30
 minutes before Nomad recognizes that they are `down` and replaces their
 work.
 
-[encryption]: /nomad/tutorials/transport-security/security-gossip-encryption 'Nomad Encryption Overview'
+[encryption]: /nomad/docs/secure/traffic/gossip-encryption 'Nomad Encryption Overview'
 [server-join]: /nomad/docs/configuration/server_join 'Server Join'
 [update-scheduler-config]: /nomad/api-docs/operator/scheduler#update-scheduler-configuration 'Scheduler Config'
 [bootstrapping a cluster]: /nomad/docs/faq#bootstrapping
 [rfc4648]: https://tools.ietf.org/html/rfc4648#section-5
-[monitoring_nomad_progress]: /nomad/docs/operations/monitoring-nomad#progress
-[`nomad operator gossip keyring generate`]: /nomad/docs/commands/operator/gossip/keyring-generate
+[monitoring_nomad_progress]:/nomad/docs/monitor#progress
+[`nomad operator gossip keyring generate`]: /nomad/commands/operator/gossip/keyring-generate
 [search]: /nomad/docs/configuration/search
-[encryption key]: /nomad/docs/operations/key-management
+[encryption key]: /nomad/docs/manage/key-management
 [disconnect.lost_after]: /nomad/docs/job-specification/disconnect#lost_after
 [herd]: https://en.wikipedia.org/wiki/Thundering_herd_problem
 [wi]: /nomad/docs/concepts/workload-identity
-[Configure for multiple regions]: /nomad/tutorials/access-control/access-control-bootstrap#configure-for-multiple-regions
+[Configure for multiple regions]: /nomad/docs/secure/acl/bootstrap#configure-for-multiple-regions
 [top_level_data_dir]: /nomad/docs/configuration#data_dir
 [JWKS URL]: /nomad/api-docs/operator/keyring#list-active-public-keys
+[monitoring_nomad_client_introduction]:/nomad/docs/monitor#client-introduction

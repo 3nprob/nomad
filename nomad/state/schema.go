@@ -16,6 +16,7 @@ const (
 	tableIndex = "index"
 
 	TableNamespaces               = "namespaces"
+	TableNodes                    = "nodes"
 	TableNodePools                = "node_pools"
 	TableServiceRegistrations     = "service_registrations"
 	TableVariables                = "variables"
@@ -83,7 +84,6 @@ func init() {
 		periodicLaunchTableSchema,
 		evalTableSchema,
 		allocTableSchema,
-		vaultAccessorTableSchema,
 		aclPolicyTableSchema,
 		aclTokenTableSchema,
 		oneTimeTokenTableSchema,
@@ -147,7 +147,7 @@ func indexTableSchema() *memdb.TableSchema {
 // This table is used to store all the client nodes that are registered.
 func nodeTableSchema() *memdb.TableSchema {
 	return &memdb.TableSchema{
-		Name: "nodes",
+		Name: TableNodes,
 		Indexes: map[string]*memdb.IndexSchema{
 			// Primary index is used for node management
 			// and simple direct lookup. ID is required to be
@@ -174,6 +174,14 @@ func nodeTableSchema() *memdb.TableSchema {
 				Unique:       false,
 				Indexer: &memdb.StringFieldIndex{
 					Field: "NodePool",
+				},
+			},
+			indexSigningKey: {
+				Name:         indexSigningKey,
+				AllowMissing: true,
+				Unique:       false,
+				Indexer: &memdb.StringFieldIndex{
+					Field: "IdentitySigningKeyID",
 				},
 			},
 		},
@@ -825,44 +833,6 @@ func allocTableSchema() *memdb.TableSchema {
 	}
 }
 
-// vaultAccessorTableSchema returns the MemDB schema for the Vault Accessor
-// Table. This table tracks Vault accessors for tokens created on behalf of
-// allocations required Vault tokens.
-func vaultAccessorTableSchema() *memdb.TableSchema {
-	return &memdb.TableSchema{
-		Name: "vault_accessors",
-		Indexes: map[string]*memdb.IndexSchema{
-			// The primary index is the accessor id
-			"id": {
-				Name:         "id",
-				AllowMissing: false,
-				Unique:       true,
-				Indexer: &memdb.StringFieldIndex{
-					Field: "Accessor",
-				},
-			},
-
-			"alloc_id": {
-				Name:         "alloc_id",
-				AllowMissing: false,
-				Unique:       false,
-				Indexer: &memdb.StringFieldIndex{
-					Field: "AllocID",
-				},
-			},
-
-			indexNodeID: {
-				Name:         indexNodeID,
-				AllowMissing: false,
-				Unique:       false,
-				Indexer: &memdb.StringFieldIndex{
-					Field: "NodeID",
-				},
-			},
-		},
-	}
-}
-
 // aclPolicyTableSchema returns the MemDB schema for the policy table.
 // This table is used to store the policies which are referenced by tokens
 func aclPolicyTableSchema() *memdb.TableSchema {
@@ -907,10 +877,10 @@ func (a *ACLPolicyJobACLFieldIndex) FromObject(obj interface{}) (bool, []byte, e
 	if ns == "" {
 		return false, nil, nil
 	}
+
 	jobID := policy.JobACL.JobID
 	if jobID == "" {
-		return false, nil, fmt.Errorf(
-			"object %#v is not a valid ACLPolicy: Namespace without JobID", obj)
+		return true, []byte(ns + "\x00\x00"), nil
 	}
 
 	val := ns + "\x00" + jobID + "\x00"
@@ -919,19 +889,27 @@ func (a *ACLPolicyJobACLFieldIndex) FromObject(obj interface{}) (bool, []byte, e
 
 // FromArgs is used to build an exact index lookup based on arguments
 func (a *ACLPolicyJobACLFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("must provide two arguments")
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("must provide one or two arguments")
 	}
 	arg0, ok := args[0].(string)
 	if !ok {
 		return nil, fmt.Errorf("argument must be a string: %#v", args[0])
 	}
+
+	if len(args) == 1 {
+		// Add two null characters to fully terminate a
+		// namespace only entry
+		return []byte(arg0 + "\x00\x00"), nil
+	}
+
 	arg1, ok := args[1].(string)
 	if !ok {
 		return nil, fmt.Errorf("argument must be a string: %#v", args[0])
 	}
 
-	// Add the null character as a terminator
+	// Add the null character as a separator between the
+	// namespace and job id and one for the terminator
 	arg0 += "\x00" + arg1 + "\x00"
 	return []byte(arg0), nil
 }

@@ -3588,6 +3588,12 @@ func TestTaskGroupDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Kind",
+								Old:  "",
+								New:  "",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "Name",
 								Old:  "foo",
 								New:  "foo",
@@ -4083,6 +4089,17 @@ func TestTaskGroupDiff(t *testing.T) {
 														Old:  "baz",
 														New:  "",
 													},
+												},
+											},
+											{
+												Type: DiffTypeDeleted,
+												Name: "VolumeMount",
+												Fields: []*FieldDiff{
+													{Type: DiffTypeDeleted, Name: "Destination", Old: "/path"},
+													{Type: DiffTypeDeleted, Name: "PropagationMode", Old: "private"},
+													{Type: DiffTypeDeleted, Name: "ReadOnly", Old: "false"},
+													{Type: DiffTypeDeleted, Name: "SELinuxLabel", Old: "Z"},
+													{Type: DiffTypeDeleted, Name: "Volume", Old: "vol0"},
 												},
 											},
 										},
@@ -7069,6 +7086,10 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Kind",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "Name",
 								Old:  "foo",
 								New:  "foo",
@@ -7232,6 +7253,10 @@ func TestTaskDiff(t *testing.T) {
 								Name: "EnableTagOverride",
 								Old:  "false",
 								New:  "false",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "Kind",
 							},
 							{
 								Type: DiffTypeNone,
@@ -7782,6 +7807,10 @@ func TestTaskDiff(t *testing.T) {
 								Name: "EnableTagOverride",
 								Old:  "false",
 								New:  "false",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "Kind",
 							},
 							{
 								Type: DiffTypeNone,
@@ -8557,6 +8586,12 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeAdded,
+								Name: "Once",
+								Old:  "",
+								New:  "false",
+							},
+							{
+								Type: DiffTypeAdded,
 								Name: "Perms",
 								Old:  "",
 								New:  "0776",
@@ -8689,6 +8724,12 @@ func TestTaskDiff(t *testing.T) {
 								Type: DiffTypeDeleted,
 								Name: "Gid",
 								Old:  "20",
+								New:  "",
+							},
+							{
+								Type: DiffTypeDeleted,
+								Name: "Once",
+								Old:  "false",
 								New:  "",
 							},
 							{
@@ -9425,6 +9466,174 @@ func TestTaskDiff(t *testing.T) {
 				},
 			},
 		},
+		{
+			Name: "Secret edited",
+			Old: &Task{
+				Secrets: []*Secret{
+					{
+						Name:     "foo",
+						Provider: "bar",
+						Path:     "/foo/bar",
+						Config: map[string]any{
+							"foo": "bar",
+						},
+						Env: map[string]string{
+							"foo": "bar",
+						},
+					},
+				},
+			},
+			New: &Task{
+				Secrets: []*Secret{
+					{
+						Name:     "foo",
+						Provider: "bar1",
+						Path:     "/foo/bar1",
+						Config: map[string]any{
+							"foo": "bar1",
+						},
+						Env: map[string]string{
+							"foo": "bar",
+						},
+					},
+				},
+			},
+			Expected: &TaskDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "Secret",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Config[foo]",
+								Old:  "bar",
+								New:  "bar1",
+							},
+							{
+								Type: DiffTypeEdited,
+								Name: "Path",
+								Old:  "/foo/bar",
+								New:  "/foo/bar1",
+							},
+							{
+								Type: DiffTypeEdited,
+								Name: "Provider",
+								Old:  "bar",
+								New:  "bar1",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "Secret added",
+			Old: &Task{
+				Secrets: []*Secret{},
+			},
+			New: &Task{
+				Secrets: []*Secret{
+					{
+						Name:     "foo",
+						Provider: "bar",
+						Path:     "/foo/bar",
+						Config: map[string]any{
+							"foo": "bar",
+						},
+					},
+				},
+			},
+			Expected: &TaskDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeAdded,
+						Name: "Secret",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeAdded,
+								Name: "Config[foo]",
+								Old:  "",
+								New:  "bar",
+							},
+							{
+								Type: DiffTypeAdded,
+								Name: "Name",
+								Old:  "",
+								New:  "foo",
+							},
+							{
+								Type: DiffTypeAdded,
+								Name: "Path",
+								Old:  "",
+								New:  "/foo/bar",
+							},
+							{
+								Type: DiffTypeAdded,
+								Name: "Provider",
+								Old:  "",
+								New:  "bar",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "Secret deleted",
+			Old: &Task{
+				Secrets: []*Secret{
+					{
+						Name:     "foo",
+						Provider: "bar",
+						Path:     "/foo/bar",
+						Config: map[string]any{
+							"foo": "bar",
+						},
+					},
+				},
+			},
+			New: &Task{
+				Secrets: []*Secret{},
+			},
+			Expected: &TaskDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeDeleted,
+						Name: "Secret",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeDeleted,
+								Name: "Config[foo]",
+								Old:  "bar",
+								New:  "",
+							},
+							{
+								Type: DiffTypeDeleted,
+								Name: "Name",
+								Old:  "foo",
+								New:  "",
+							},
+							{
+								Type: DiffTypeDeleted,
+								Name: "Path",
+								Old:  "/foo/bar",
+								New:  "",
+							},
+							{
+								Type: DiffTypeDeleted,
+								Name: "Provider",
+								Old:  "bar",
+								New:  "",
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -9534,6 +9743,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "true",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeEdited,
@@ -9655,6 +9868,10 @@ func TestServicesDiff(t *testing.T) {
 							New:  "false",
 						},
 						{
+							Type: DiffTypeNone,
+							Name: "Kind",
+						},
+						{
 							Type: DiffTypeAdded,
 							Name: "Name",
 							New:  "webapp",
@@ -9726,6 +9943,10 @@ func TestServicesDiff(t *testing.T) {
 							Type: DiffTypeAdded,
 							Name: "EnableTagOverride",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeAdded,
@@ -9807,6 +10028,10 @@ func TestServicesDiff(t *testing.T) {
 						},
 						{
 							Type: DiffTypeNone,
+							Name: "Kind",
+						},
+						{
+							Type: DiffTypeNone,
 							Name: "Name",
 							Old:  "webapp",
 							New:  "webapp",
@@ -9825,6 +10050,82 @@ func TestServicesDiff(t *testing.T) {
 							Old:  "http",
 							New:  "https-redirect",
 						}, {
+							Type: DiffTypeNone,
+							Name: "Provider",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "TaskName",
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:       "Modify service kind field",
+			Contextual: true,
+			Old: []*Service{
+				{
+					Name: "webapp",
+					Kind: "api-gateway",
+				},
+			},
+			New: []*Service{
+				{
+					Name: "webapp",
+					Kind: "mesh-gateway",
+				},
+			},
+			Expected: []*ObjectDiff{
+				{
+					Type: DiffTypeEdited,
+					Name: "Service",
+					Fields: []*FieldDiff{
+						{
+							Type: DiffTypeNone,
+							Name: "Address",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "AddressMode",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Cluster",
+							Old:  "",
+							New:  "",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "EnableTagOverride",
+							Old:  "false",
+							New:  "false",
+						},
+						{
+							Type: DiffTypeEdited,
+							Name: "Kind",
+							Old:  "api-gateway",
+							New:  "mesh-gateway",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Name",
+							Old:  "webapp",
+							New:  "webapp",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Namespace",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "OnUpdate",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "PortLabel",
+						},
+						{
 							Type: DiffTypeNone,
 							Name: "Provider",
 						},
@@ -9887,6 +10188,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "false",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeNone,
@@ -9982,6 +10287,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "false",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeNone,
@@ -10412,4 +10721,476 @@ func TestServicesDiff(t *testing.T) {
 			must.Eq(t, c.Expected, actual)
 		})
 	}
+}
+
+func TestDiff_SidecarIdentities(t *testing.T) {
+	oldTask := &SidecarTask{
+		Name:   "old",
+		Driver: "docker",
+		User:   "sidecar",
+		Config: map[string]any{"foo": "bar"},
+		Env:    map[string]string{"FOO": "BAR"},
+		Resources: &Resources{
+			Cores: 2,
+			NUMA: &NUMA{
+				Affinity: "none",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		Identities: []*WorkloadIdentity{
+			{
+				Name:         "fooident",
+				Audience:     []string{"foo.bar"},
+				ChangeMode:   "signal",
+				ChangeSignal: "SIGHUP2",
+			},
+		},
+	}
+	newTask := &SidecarTask{
+		Name:   "new",
+		Driver: "podman",
+		User:   "proxy",
+		Config: map[string]any{"eggs": "spam"},
+		Env:    map[string]string{"EGGS": "SPAM"},
+		Resources: &Resources{
+			Cores: 4,
+			NUMA: &NUMA{
+				Affinity: "prefer",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		Identities: []*WorkloadIdentity{
+			{
+				Name:         "fooident",
+				Audience:     []string{"foo.bar", "new.foo.bar"},
+				ChangeMode:   "signal",
+				ChangeSignal: "SIGHUP3",
+			},
+			{
+				Name:         "barident",
+				Audience:     []string{"bar.foo"},
+				ChangeMode:   "signal",
+				ChangeSignal: "SIGHUP",
+			},
+		},
+	}
+	expected := &ObjectDiff{
+		Type: DiffTypeEdited,
+		Name: "SidecarTask",
+		Fields: []*FieldDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Driver",
+				Old:  "docker",
+				New:  "podman",
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "Env[EGGS]",
+				Old:  "",
+				New:  "SPAM",
+			},
+			{
+				Type: DiffTypeDeleted,
+				Name: "Env[FOO]",
+				Old:  "BAR",
+				New:  "",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Name",
+				Old:  "old",
+				New:  "new",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "User",
+				Old:  "sidecar",
+				New:  "proxy",
+			},
+		},
+		Objects: []*ObjectDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Config",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeAdded,
+						Name: "eggs",
+						Old:  "",
+						New:  "spam",
+					},
+					{
+						Type: DiffTypeDeleted,
+						Name: "foo",
+						Old:  "bar",
+						New:  "",
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Resources",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "CPU",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeEdited,
+						Name: "Cores",
+						Old:  "2",
+						New:  "4",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "DiskMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "IOPS",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMaxMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SecretsMB",
+						Old:  "0",
+						New:  "0",
+					},
+				},
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "NUMA",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Affinity",
+								Old:  "none",
+								New:  "prefer",
+							},
+						},
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Identity",
+				Fields: []*FieldDiff{
+					{Type: "None", Name: "ChangeMode", Old: "signal", New: "signal"},
+					{Type: "Edited", Name: "ChangeSignal", Old: "SIGHUP2", New: "SIGHUP3"},
+					{Type: "None", Name: "Env", Old: "false", New: "false"},
+					{Type: "None", Name: "File", Old: "false", New: "false"},
+					{Type: "None", Name: "Filepath"},
+					{Type: "None", Name: "Name", Old: "fooident", New: "fooident"},
+					{Type: "None", Name: "ServiceName"},
+					{Type: "None", Name: "TTL", Old: "0", New: "0"},
+				},
+				Objects: []*ObjectDiff{
+					{Type: "Added", Name: "Audience", Fields: []*FieldDiff{
+						{Type: "Added", Name: "Audience", New: "new.foo.bar"},
+						{Type: "None", Name: "Audience", Old: "foo.bar", New: "foo.bar"},
+					},
+					},
+				},
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "Identity",
+				Fields: []*FieldDiff{
+					{Type: "Added", Name: "ChangeMode", New: "signal"},
+					{Type: "Added", Name: "ChangeSignal", New: "SIGHUP"},
+					{Type: "Added", Name: "Env", New: "false"},
+					{Type: "Added", Name: "File", New: "false"},
+					{Type: "None", Name: "Filepath"},
+					{Type: "Added", Name: "Name", New: "barident"},
+					{Type: "None", Name: "ServiceName"},
+					{Type: "Added", Name: "TTL", New: "0"},
+				},
+				Objects: []*ObjectDiff{
+					{Type: "Added", Name: "Audience", Fields: []*FieldDiff{
+						{Type: "Added", Name: "Audience", New: "bar.foo"},
+					},
+					},
+				},
+			},
+		},
+	}
+
+	actual := sidecarTaskDiff(oldTask, newTask, true)
+	must.Eq(t, expected, actual)
+}
+
+// TestDiff_SidecarVolumes asserts changes to sidecar task volumes are
+// detected. See #25878
+func TestDiff_SidecarVolumes(t *testing.T) {
+	oldTask := &SidecarTask{
+		Name:   "old",
+		Driver: "docker",
+		User:   "sidecar",
+		Config: map[string]any{"foo": "bar"},
+		Env:    map[string]string{"FOO": "BAR"},
+		Resources: &Resources{
+			Cores: 2,
+			NUMA: &NUMA{
+				Affinity: "none",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		VolumeMounts: []*VolumeMount{
+			{
+				Volume:   "foo",
+				ReadOnly: true,
+			},
+		},
+	}
+	newTask := &SidecarTask{
+		Name:   "new",
+		Driver: "podman",
+		User:   "proxy",
+		Config: map[string]any{"eggs": "spam"},
+		Env:    map[string]string{"EGGS": "SPAM"},
+		Resources: &Resources{
+			Cores: 4,
+			NUMA: &NUMA{
+				Affinity: "prefer",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		VolumeMounts: []*VolumeMount{
+			{
+				Volume:   "foo",
+				ReadOnly: false,
+			},
+			{
+				Volume:   "bar",
+				ReadOnly: true,
+			},
+		},
+	}
+	expected := &ObjectDiff{
+		Type: DiffTypeEdited,
+		Name: "SidecarTask",
+		Fields: []*FieldDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Driver",
+				Old:  "docker",
+				New:  "podman",
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "Env[EGGS]",
+				Old:  "",
+				New:  "SPAM",
+			},
+			{
+				Type: DiffTypeDeleted,
+				Name: "Env[FOO]",
+				Old:  "BAR",
+				New:  "",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Name",
+				Old:  "old",
+				New:  "new",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "User",
+				Old:  "sidecar",
+				New:  "proxy",
+			},
+		},
+		Objects: []*ObjectDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Config",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeAdded,
+						Name: "eggs",
+						Old:  "",
+						New:  "spam",
+					},
+					{
+						Type: DiffTypeDeleted,
+						Name: "foo",
+						Old:  "bar",
+						New:  "",
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Resources",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "CPU",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeEdited,
+						Name: "Cores",
+						Old:  "2",
+						New:  "4",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "DiskMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "IOPS",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMaxMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SecretsMB",
+						Old:  "0",
+						New:  "0",
+					},
+				},
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "NUMA",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Affinity",
+								Old:  "none",
+								New:  "prefer",
+							},
+						},
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "VolumeMount",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "Destination",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "PropagationMode",
+					},
+					{
+						Type: DiffTypeEdited,
+						Name: "ReadOnly",
+						Old:  "true",
+						New:  "false",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SELinuxLabel",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "Volume",
+						Old:  "foo",
+						New:  "foo",
+					},
+				},
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "VolumeMount",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "Destination",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "PropagationMode",
+					},
+					{
+						Type: DiffTypeAdded,
+						Name: "ReadOnly",
+						New:  "true",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SELinuxLabel",
+					},
+					{
+						Type: DiffTypeAdded,
+						Name: "Volume",
+						Old:  "",
+						New:  "bar",
+					},
+				},
+			},
+		},
+	}
+
+	actual := sidecarTaskDiff(oldTask, newTask, true)
+	must.Eq(t, expected, actual)
 }

@@ -5,6 +5,11 @@ description: >
   Overview of runtime metrics available in the Nomad Autoscaler.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # Nomad Autoscaler Telemetry
 
 The Nomad Autoscaler agent collects various runtime metrics about the performance
@@ -146,6 +151,22 @@ policy handling.
         <code>nomad-autoscaler.policy.total_num</code>
       </td>
       <td>The number of policies currently held within the autoscaler</td>
+      <td>Gauge</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>
+        <code>nomad-autoscaler.policy.queue.horizontal</code>
+      </td>
+      <td>The number of scaling actions currently being executed for horizontal scaling</td>
+      <td>Gauge</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>
+        <code>nomad-autoscaler.policy.queue.cluster</code>
+      </td>
+      <td>The number of scaling actions currently being executed for cluster scaling</td>
       <td>Gauge</td>
       <td></td>
     </tr>

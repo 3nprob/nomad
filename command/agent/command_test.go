@@ -77,6 +77,10 @@ func TestCommand_Args(t *testing.T) {
 			[]string{"-client", "-node-pool=not@valid"},
 			"Invalid node pool",
 		},
+		{
+			[]string{"-client", "-eventlog-level", "DEBUG"},
+			"eventlog.level must be one of INFO, WARN, or ERROR",
+		},
 	}
 	for _, tc := range tcases {
 		// Make a new command. We preemptively close the shutdownCh
@@ -485,6 +489,50 @@ func TestIsValidConfig(t *testing.T) {
 			},
 			err: "missing protocol scheme",
 		},
+		{
+			name: "invalidate keyring provider",
+			conf: Config{
+				DataDir: "/tmp",
+				Server: &ServerConfig{
+					BootstrapExpect: 1,
+					Enabled:         true,
+				},
+				KEKProviders: []*structs.KEKProviderConfig{
+					{
+						Name:     "invalid",
+						Provider: "foo",
+					},
+				},
+			},
+			err: "unknown keyring provider",
+		},
+		{
+			name: "ValidEventlog",
+			conf: Config{
+				DataDir: "/tmp",
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Eventlog: &Eventlog{
+					Enabled: true,
+					Level:   "INFO",
+				},
+			},
+		},
+		{
+			name: "InvalidEventlog",
+			conf: Config{
+				DataDir: "/tmp",
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Eventlog: &Eventlog{
+					Enabled: true,
+					Level:   "DEBUG",
+				},
+			},
+			err: "eventlog.level must be one of INFO, WARN, or ERROR",
+		},
 	}
 
 	for _, tc := range cases {
@@ -616,6 +664,34 @@ vault {
 			tc.checkFn(t, got)
 		})
 	}
+}
+
+func TestCommand_readConfig_clientIntroToken(t *testing.T) {
+
+	t.Run("env var", func(t *testing.T) {
+		t.Setenv("NOMAD_CLIENT_INTRO_TOKEN", "test-intro-token")
+
+		cmd := &Command{Ui: cli.NewMockUi(), args: []string{"-dev"}}
+		outputConfig := cmd.readConfig()
+		must.Eq(t, "test-intro-token", outputConfig.Client.IntroToken)
+	})
+
+	t.Run("cli flag", func(t *testing.T) {
+		cmd := &Command{Ui: cli.NewMockUi(), args: []string{
+			"-dev",
+			"-client-intro-token=test-intro-token",
+		}}
+		outputConfig := cmd.readConfig()
+		must.Eq(t, "test-intro-token", outputConfig.Client.IntroToken)
+	})
+
+	t.Run("none", func(t *testing.T) {
+		cmd := &Command{Ui: cli.NewMockUi(), args: []string{
+			"-dev",
+		}}
+		outputConfig := cmd.readConfig()
+		must.Eq(t, "", outputConfig.Client.IntroToken)
+	})
 }
 
 func Test_setupLoggers_logFile(t *testing.T) {

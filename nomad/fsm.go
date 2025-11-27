@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/scheduler"
+	sstructs "github.com/hashicorp/nomad/scheduler/structs"
 	"github.com/hashicorp/raft"
 )
 
@@ -497,7 +498,7 @@ func (n *nomadFSM) applyStatusUpdate(msgType structs.MessageType, buf []byte, in
 		panic(fmt.Errorf("failed to decode request: %v", err))
 	}
 
-	if err := n.state.UpdateNodeStatus(msgType, index, req.NodeID, req.Status, req.UpdatedAt, req.NodeEvent); err != nil {
+	if err := n.state.UpdateNodeStatus(msgType, index, &req); err != nil {
 		n.logger.Error("UpdateNodeStatus failed", "error", err)
 		return err
 	}
@@ -585,6 +586,15 @@ func (n *nomadFSM) applyNodePoolUpsert(msgType structs.MessageType, buf []byte, 
 		panic(fmt.Errorf("failed to decode request: %v", err))
 	}
 
+	// Nomad 1.11 added the NodeIdentityTTL field to NodePool. When the
+	// cluster is upgraded, we need to ensure that the field is set with
+	// its default value. The hash also needs to be recalculated since it would
+	// have changed.
+	for _, pool := range req.NodePools {
+		pool.Canonicalize()
+		_ = pool.SetHash()
+	}
+
 	if err := n.state.UpsertNodePools(msgType, index, req.NodePools); err != nil {
 		n.logger.Error("UpsertNodePool failed", "error", err)
 		return err
@@ -624,7 +634,7 @@ func (n *nomadFSM) applyUpsertJob(msgType structs.MessageType, buf []byte, index
 	 */
 	req.Job.Canonicalize()
 
-	if err := n.state.UpsertJob(msgType, index, req.Submission, req.Job); err != nil {
+	if err := n.state.UpsertJobWithRequest(msgType, index, &req); err != nil {
 		n.logger.Error("UpsertJob failed", "error", err)
 		return err
 	}
@@ -724,8 +734,8 @@ func (n *nomadFSM) applyUpsertJob(msgType structs.MessageType, buf []byte, index
 		}
 	}
 
-	// COMPAT: Prior to Nomad 0.12.x evaluations were submitted in a separate Raft log,
-	// so this may be nil during server upgrades.
+	// Not all job registrations will include an eval (ex. registering a
+	// dispatch/periodic job)
 	if req.Eval != nil {
 		req.Eval.JobModifyIndex = index
 
@@ -800,6 +810,7 @@ func (n *nomadFSM) applyBatchDeregisterJob(msgType structs.MessageType, buf []by
 // handleJobDeregister is used to deregister a job. Leaves error logging up to
 // caller.
 func (n *nomadFSM) handleJobDeregister(index uint64, jobID, namespace string, purge bool, submitTime int64, noShutdownDelay bool, tx state.Txn) error {
+
 	// If it is periodic remove it from the dispatcher
 	if err := n.periodicDispatcher.Remove(namespace, jobID); err != nil {
 		return fmt.Errorf("periodicDispatcher.Remove failed: %w", err)
@@ -833,27 +844,34 @@ func (n *nomadFSM) handleJobDeregister(index uint64, jobID, namespace string, pu
 		// the job was updated to be non-periodic, thus checking if it is periodic
 		// doesn't ensure we clean it up properly.
 		n.state.DeletePeriodicLaunchTxn(index, namespace, jobID, tx)
-	} else {
-		// Get the current job and mark it as stopped and re-insert it.
-		ws := memdb.NewWatchSet()
-		current, err := n.state.JobByIDTxn(ws, namespace, jobID, tx)
-		if err != nil {
-			return fmt.Errorf("JobByID lookup failed: %w", err)
-		}
+		return nil
+	}
 
-		if current == nil {
-			return fmt.Errorf("job %q in namespace %q doesn't exist to be deregistered", jobID, namespace)
-		}
+	// Get the current job and mark it as stopped and re-insert it.
+	ws := memdb.NewWatchSet()
+	current, err := n.state.JobByIDTxn(ws, namespace, jobID, tx)
+	if err != nil {
+		return fmt.Errorf("JobByID lookup failed: %w", err)
+	}
 
-		stopped := current.Copy()
-		stopped.Stop = true
-		if submitTime != 0 {
-			stopped.SubmitTime = submitTime
-		}
+	if current == nil {
+		return fmt.Errorf("job %q in namespace %q doesn't exist to be deregistered", jobID, namespace)
+	}
 
-		if err := n.state.UpsertJobTxn(index, nil, stopped, tx); err != nil {
-			return fmt.Errorf("UpsertJob failed: %w", err)
-		}
+	stopped := current.Copy()
+	stopped.Stop = true
+	if submitTime != 0 {
+		stopped.SubmitTime = submitTime
+	}
+
+	// Disable scaling policies to avoid monitoring stopped jobs
+	scalingPolicies := stopped.GetScalingPolicies()
+	for _, policy := range scalingPolicies {
+		policy.Enabled = false
+	}
+
+	if err := n.state.UpsertJobTxn(index, nil, stopped, tx); err != nil {
+		return fmt.Errorf("UpsertJob failed: %w", err)
 	}
 
 	return nil
@@ -947,11 +965,21 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 	// Create a watch set
 	ws := memdb.NewWatchSet()
 
+	followupEvalsToCancel := []string{}
+
 	// Updating the allocs with the job id and task group name
 	for _, alloc := range req.Alloc {
 		if existing, _ := n.state.AllocByID(ws, alloc.ID); existing != nil {
 			alloc.JobID = existing.JobID
 			alloc.TaskGroup = existing.TaskGroup
+
+			// a reconnecting alloc has a followup eval which will be stuck in
+			// pending, blocking new evals for failure of this alloc. The
+			// UpdateAllocsFromClient method will cancel the eval in the state
+			// store but we need to remove it from the broker too.
+			if eval, ok := existing.FollowupEvalForReconnect(alloc); ok {
+				followupEvalsToCancel = append(followupEvalsToCancel, eval)
+			}
 		}
 	}
 
@@ -991,6 +1019,23 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 
 			n.blockedEvals.UnblockClassAndQuota(node.ComputedClass, quota, index)
 			n.blockedEvals.UnblockNode(node.ID, index)
+		}
+	}
+
+	// It's possible that allocs on different nodes were marked unknown in the
+	// same eval and therefore have the same FollowupEvalID. If only one of
+	// those allocs reconnects, we need to ensure we keep around the waiting
+	// eval for the other allocs. Otherwise, drop it from the eval broker.
+	for _, evalID := range followupEvalsToCancel {
+		// ws is nil because we need the update done above
+		eval, err := n.state.EvalByID(nil, evalID)
+		if err != nil {
+			n.logger.Error("looking up followup eval failed",
+				"eval_id", evalID, "error", err)
+			return err
+		}
+		if eval != nil && !eval.ShouldEnqueue() {
+			n.evalBroker.DropWaiting(eval)
 		}
 	}
 
@@ -1864,6 +1909,13 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 				return err
 			}
 
+			// Nomad 1.11 added the NodeIdentityTTL field to NodePool. When the
+			// cluster is upgraded, we need to ensure that the field is set with
+			// its default value. The hash also needs to be recalculated since
+			// it would have changed.
+			pool.Canonicalize()
+			_ = pool.SetHash()
+
 			// Perform the restoration.
 			if err := restore.NodePoolRestore(pool); err != nil {
 				return err
@@ -2012,7 +2064,7 @@ func (n *nomadFSM) reconcileQueuedAllocations(index uint64) error {
 		if job.IsParameterized() || job.IsPeriodic() {
 			continue
 		}
-		planner := &scheduler.Harness{
+		planner := &sstructs.PlanBuilder{
 			State: &snap.StateStore,
 		}
 		// Create an eval and mark it as requiring annotations and insert that as well
@@ -3054,21 +3106,18 @@ func (s *nomadSnapshot) persistServiceRegistrations(sink raft.SnapshotSink,
 		return err
 	}
 
-	for {
-		// Get the next item.
-		for raw := serviceRegs.Next(); raw != nil; raw = serviceRegs.Next() {
+	for raw := serviceRegs.Next(); raw != nil; raw = serviceRegs.Next() {
 
-			// Prepare the request struct.
-			reg := raw.(*structs.ServiceRegistration)
+		// Prepare the request struct.
+		reg := raw.(*structs.ServiceRegistration)
 
-			// Write out a service registration snapshot.
-			sink.Write([]byte{byte(ServiceRegistrationSnapshot)})
-			if err := encoder.Encode(reg); err != nil {
-				return err
-			}
+		// Write out a service registration snapshot.
+		sink.Write([]byte{byte(ServiceRegistrationSnapshot)})
+		if err := encoder.Encode(reg); err != nil {
+			return err
 		}
-		return nil
 	}
+	return nil
 }
 
 func (s *nomadSnapshot) persistVariables(sink raft.SnapshotSink,

@@ -1,18 +1,20 @@
 ---
 layout: docs
-page_title: Dynamic Host Volume Specification
+page_title: Nomad dynamic host volume specification
 description: |-
-  Learn about the Nomad dynamic host volume specification. Create and
-  register dynamic host volumes using the `volume create` and `volume
-  register` commands and the `PUT /v1/volume/host/create` and
-  `PUT /v1/volume/host/register` API endpoints.  Define capacity,
+  Learn about the Nomad dynamic host volume specification. Define capacity,
   capability, constraint, node, node pool, and parameters passed directly
   to the plugin to configure the volume. Learn how volume creation and
   registration are different. Additionally, learn how to place a volume on
   specific nodes, update a volume, and expand a volume's capacity.
 ---
 
-# Dynamic Host Volume Specification
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
+# Nomad dynamic host volume specification
 
 This page provides reference information for the Nomad dynamic host volume
 specification. Create and register dynamic host volumes using the [`volume
@@ -33,7 +35,7 @@ differences.
 The file may be provided as either HCL or JSON to the commands and as JSON to
 the API.
 
-## Volume Specification Parameters
+## Parameters
 
 - `capacity` `(string: <optional>)` - The size of a volume in bytes. Either the
   physical size of a disk or a quota, depending on the plugin. This field must
@@ -145,7 +147,7 @@ parameters = {
 
 </CodeBlockConfig>
 
-## Differences Between Create and Register
+## Differences between create and register
 
 Several fields are set automatically by Nomad or the plugin when `volume create`
 or `volume register` commands, or the equivalent APIs, are successful and you
@@ -162,7 +164,7 @@ ignored but must be consistent if set; the `node_pool` must match the node set
 by `node_id`, and the minimum capacity must be less than the `capacity_max` and
 `capacity`.
 
-## Volume Placement
+## Volume placement
 
 The `volume create` command creates the volume on a single node. If `node_id` is
 set, the volume is created on that node. The `node_pool` must be unset or match
@@ -173,7 +175,7 @@ place the volume on the first available node based on the following factors:
 * If `node_pool` is set, the selected node must be in that node pool.
 * The node must meet any and all constraints defined by the `constraint` fields.
 
-## Updating a Volume Definition
+## Update a volume definition
 
 The `volume create` and `volume register` commands allow updating a volume
 definition. However, after volume registration, you are only allowed to update
@@ -194,7 +196,7 @@ You cannot update the `name`, `type`, and `node_id` fields. You may only change
 the `node_pool` field from empty to the node pool that matches the `node_id`
 field.
 
-## Volume Expansion
+## Volume expansion
 
 Dynamic host volumes may be expanded if the plugin allows. Reducing the size of
 a volume is not permitted.
@@ -262,7 +264,7 @@ parameters {
 }
 ```
 
-### Example Volume Expansion
+### Volume expansion
 
 This example shows how to expand a volume after it has been created or
 registered.
@@ -341,9 +343,9 @@ registered.
 [volume_source]: /nomad/docs/job-specification/volume#source
 [capability]: /nomad/docs/other-specifications/volume/capability
 [constraint]: /nomad/docs/job-specification/constraint
-[`volume create`]: /nomad/docs/commands/volume/create
-[`volume register`]: /nomad/docs/commands/volume/register
-[`volume status`]: /nomad/docs/commands/volume/status
-[dhv_plugin]: /nomad/docs/concepts/plugins/storage/host-volumes
+[`volume create`]: /nomad/commands/volume/create
+[`volume register`]: /nomad/commands/volume/register
+[`volume status`]: /nomad/commands/volume/status
+[dhv_plugin]: /nomad/docs/architecture/storage/host-volumes
 [mkdir_plugin]: #mkdir-plugin
 [host_volumes_dir]: /nomad/docs/configuration/client#host_volumes_dir

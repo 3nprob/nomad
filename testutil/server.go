@@ -29,6 +29,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/discover"
 	"github.com/hashicorp/nomad/helper/pointer"
+	"github.com/shoenig/test/must"
 )
 
 // TestServerConfig is the main server configuration struct.
@@ -104,7 +105,7 @@ type VaultConfig struct {
 	Enabled              bool                    `json:"enabled"`
 	Address              string                  `json:"address"`
 	AllowUnauthenticated *bool                   `json:"allow_unauthenticated,omitempty"`
-	Token                string                  `json:"token,omitemtpy"`
+	Token                string                  `json:"token,omitempty"`
 	Role                 string                  `json:"role,omitempty"`
 	JWTAuthBackendPath   string                  `json:"jwt_auth_backend_path,omitempty"`
 	DefaultIdentity      *WorkloadIdentityConfig `json:"default_identity,omitempty"`
@@ -268,21 +269,21 @@ func NewTestServer(t testing.TB, cb ServerConfigCallback) *TestServer {
 // Stop stops the test Nomad server, and removes the Nomad data
 // directory once we are done.
 func (s *TestServer) Stop() {
-	defer os.RemoveAll(s.Config.DataDir)
+	s.t.Cleanup(func() {
+		_ = os.RemoveAll(s.Config.DataDir)
+	})
 
 	// wait for the process to exit to be sure that the data dir can be
 	// deleted on all platforms.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-
-		s.cmd.Wait()
+		_ = s.cmd.Wait()
 	}()
 
 	// kill and wait gracefully
-	if err := s.cmd.Process.Signal(os.Interrupt); err != nil {
-		s.t.Errorf("err: %s", err)
-	}
+	err := s.gracefulStop()
+	must.NoError(s.t, err)
 
 	select {
 	case <-done:
@@ -291,9 +292,9 @@ func (s *TestServer) Stop() {
 		s.t.Logf("timed out waiting for process to gracefully terminate")
 	}
 
-	if err := s.cmd.Process.Kill(); err != nil {
-		s.t.Errorf("err: %s", err)
-	}
+	err = s.cmd.Process.Kill()
+	must.NoError(s.t, err, must.Sprint("failed to kill process"))
+
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

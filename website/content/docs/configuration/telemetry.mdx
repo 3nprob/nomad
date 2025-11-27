@@ -5,6 +5,11 @@ description: |-
   Configure Nomad telemetry behavior in the `telemetry` block of a Nomad agent configuration. Configure Nomad's publication of metrics and telemetry to Statsite, StatsD, DataDog, Prometheus, and Apica (Circonus).
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # `telemetry` Block in Agent Configuration
 
 <Placement groups={['telemetry']} />
@@ -23,7 +28,7 @@ telemetry {
 
 This section of the documentation only covers the configuration options for the
 `telemetry` block. To understand the architecture and metrics themselves,
-refer to the [Telemetry guide](/nomad/docs/operations/monitoring-nomad).
+refer to the [Telemetry guide](/nomad/docs/monitor).
 
 ## `telemetry` Parameters
 
@@ -149,8 +154,10 @@ telemetry {
 
 These `telemetry` parameters apply to [Prometheus].
 
-- `prometheus_metrics` `(bool: false)` - Specifies whether the agent should
-  make Prometheus formatted metrics available at `/v1/metrics?format=prometheus`.
+- `prometheus_metrics` `(bool: false)` - Specifies whether the agent should make
+  Prometheus formatted metrics available at `/v1/metrics?format=prometheus`.
+  Nomad's Prometheus client retains metrics in memory unless scraped, so you
+  should not enable this field unless you are collecting metrics via Promtheus.
 
 ### `circonus` (Apica)
 

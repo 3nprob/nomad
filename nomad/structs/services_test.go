@@ -492,6 +492,10 @@ func TestService_Hash(t *testing.T) {
 		try(t, func(s *svc) { s.PortLabel = "newPortLabel" })
 	})
 
+	t.Run("mod kind", func(t *testing.T) {
+		try(t, func(s *svc) { s.Kind = "api-gateway" })
+	})
+
 	t.Run("mod tags", func(t *testing.T) {
 		try(t, func(s *svc) { s.Tags = []string{"new", "tags"} })
 	})
@@ -727,12 +731,23 @@ func TestSidecarTask_Equal(t *testing.T) {
 	ci.Parallel(t)
 
 	original := &SidecarTask{
-		Name:        "sidecar-task-1",
-		Driver:      "docker",
-		User:        "nobody",
-		Config:      map[string]interface{}{"foo": 1},
-		Env:         map[string]string{"color": "blue"},
-		Resources:   &Resources{MemoryMB: 300},
+		Name:      "sidecar-task-1",
+		Driver:    "docker",
+		User:      "nobody",
+		Config:    map[string]interface{}{"foo": 1},
+		Env:       map[string]string{"color": "blue"},
+		Resources: &Resources{MemoryMB: 300},
+		Identities: []*WorkloadIdentity{{
+			Name:         "myname",
+			Audience:     []string{"fooaud", "baraud"},
+			ChangeMode:   "signal",
+			ChangeSignal: "restart",
+			Env:          true,
+			File:         true,
+			Filepath:     "/local/tasktoken",
+			ServiceName:  "foosidecar",
+			TTL:          1337 * time.Minute,
+		}},
 		Meta:        map[string]string{"index": "1"},
 		KillTimeout: pointer.Of(2 * time.Second),
 		LogConfig: &LogConfig{
@@ -779,6 +794,10 @@ func TestSidecarTask_Equal(t *testing.T) {
 
 	t.Run("mod resources", func(t *testing.T) {
 		try(t, func(s *st) { s.Resources = &Resources{MemoryMB: 200} })
+	})
+
+	t.Run("mod identities", func(t *testing.T) {
+		try(t, func(s *st) { s.Identities = []*WorkloadIdentity{{Name: "mynewname"}} })
 	})
 
 	t.Run("mod meta", func(t *testing.T) {
@@ -2039,6 +2058,25 @@ func TestService_Validate(t *testing.T) {
 			expErr:    true,
 			expErrStr: "notes must not be longer than 255 characters",
 		},
+		{
+			name: "provider consul with service kind",
+			input: &Service{
+				Name:     "testservice",
+				Provider: "consul",
+				Kind:     "api-gateway",
+			},
+			expErr: false,
+		},
+		{
+			name: "provider consul with invalid service kind",
+			input: &Service{
+				Name:     "testservice",
+				Provider: "consul",
+				Kind:     "garbage",
+			},
+			expErr:    true,
+			expErrStr: "Service testservice kind must be one of consul service kind or empty",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -2138,6 +2176,9 @@ func TestService_Equal(t *testing.T) {
 	assertDiff()
 
 	o.TaggedAddresses = map[string]string{"foo": "bar"}
+	assertDiff()
+
+	o.Kind = "api-gateway"
 	assertDiff()
 }
 

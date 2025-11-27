@@ -5,6 +5,11 @@ description: >-
   Install and configure the Virt task driver plugin on your Nomad clients. Review manual instructions and those for Ubuntu, Debian, CentOS, and RHEL. Add the Virt task driver plugin to Nomad.
 ---
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+> [!IMPORTANT]  
+> **Documentation Update:** Product documentation previously located in `/website` has moved to the [`hashicorp/web-unified-docs`](https://github.com/hashicorp/web-unified-docs) repository, where all product documentation is now centralized. Please make contributions directly to `web-unified-docs`, since changes to `/website` in this repository will not appear on developer.hashicorp.com.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 # Install the Virt task driver plugin
 
 The Virt task driver plugin for Linux operating systems is not bundled with
@@ -111,7 +116,7 @@ $ sudo yum -y install nomad-driver-virt
 This example shows the default plugin configuration.
 
 ```hcl
-plugin "nomad-driver-driver" {
+plugin "nomad-driver-virt" {
   config {
     data_dir     = "/var/lib/virt"
     image_paths  = ["/var/lib/virt", "${ALLOC_DIR}"]

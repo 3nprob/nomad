@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -34,6 +35,11 @@ func (s *HTTPServer) ACLPoliciesRequest(resp http.ResponseWriter, req *http.Requ
 }
 
 func (s *HTTPServer) ACLPolicySpecificRequest(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+	// handle the special case for "self" call
+	if req.URL.Path == "/v1/acl/policy/self" {
+		return s.aclSelfPolicy(resp, req)
+	}
+
 	name := strings.TrimPrefix(req.URL.Path, "/v1/acl/policy/")
 	if len(name) == 0 {
 		return nil, CodedError(400, "Missing Policy Name")
@@ -46,7 +52,7 @@ func (s *HTTPServer) ACLPolicySpecificRequest(resp http.ResponseWriter, req *htt
 	case http.MethodDelete:
 		return s.aclPolicyDelete(resp, req, name)
 	default:
-		return nil, CodedError(405, ErrInvalidMethod)
+		return nil, CodedError(http.StatusMethodNotAllowed, ErrInvalidMethod)
 	}
 }
 
@@ -178,6 +184,51 @@ func (s *HTTPServer) ACLTokenSpecificRequest(resp http.ResponseWriter, req *http
 
 	accessor := strings.TrimPrefix(path, "/v1/acl/token/")
 	return s.aclTokenCrud(resp, req, accessor)
+}
+
+func (s *HTTPServer) aclSelfPolicy(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+	if req.Method != http.MethodGet {
+		return nil, CodedError(http.StatusMethodNotAllowed, ErrInvalidMethod)
+	}
+
+	wiPolicyReq := structs.GenericRequest{}
+	if s.parse(resp, req, &wiPolicyReq.Region, &wiPolicyReq.QueryOptions) {
+		return nil, nil
+	}
+
+	// is it a JWT or a Nomad ACL token?
+	if !helper.IsUUID(wiPolicyReq.AuthToken) {
+
+		// Resolve policies for workload identities
+		wiPolicyReply := structs.ACLPolicySetResponse{}
+		if err := s.agent.RPC("ACL.GetClaimPolicies", &wiPolicyReq, &wiPolicyReply); err != nil {
+			return nil, err
+		}
+
+		if wiPolicyReply.Policies == nil {
+			wiPolicyReply.Policies = make(map[string]*structs.ACLPolicy, 0)
+		}
+
+		// convert the output into ACLPolicyListResponse to get consistent API
+		// output
+		reply := structs.ACLPolicyListResponse{}
+		for _, wiReply := range wiPolicyReply.Policies {
+			reply.Policies = append(reply.Policies, wiReply.Stub())
+		}
+
+		setMeta(resp, &reply.QueryMeta)
+		return reply.Policies, nil
+	}
+
+	// Resolve any authenticated policies
+	policiesListReq := &structs.ACLPolicyListRequest{QueryOptions: wiPolicyReq.QueryOptions}
+	policiesListReply := structs.ACLPolicyListResponse{}
+	if err := s.agent.RPC("ACL.ListPolicies", policiesListReq, &policiesListReply); err != nil {
+		return nil, err
+	}
+
+	setMeta(resp, &policiesListReply.QueryMeta)
+	return policiesListReply.Policies, nil
 }
 
 func (s *HTTPServer) aclTokenCrud(resp http.ResponseWriter, req *http.Request,
@@ -893,4 +944,32 @@ func (s *HTTPServer) ACLLoginRequest(resp http.ResponseWriter, req *http.Request
 	}
 	setIndex(resp, out.Index)
 	return out.ACLToken, nil
+}
+
+func (s *HTTPServer) ACLCreateClientIntroductionTokenRequest(
+	_ http.ResponseWriter,
+	req *http.Request) (any, error) {
+
+	// The endpoint only supports PUT or POST requests.
+	if req.Method != http.MethodPost && req.Method != http.MethodPut {
+		return nil, CodedError(http.StatusMethodNotAllowed, ErrInvalidMethod)
+	}
+
+	args := structs.ACLCreateClientIntroductionTokenRequest{}
+
+	// Perform the parsing of the write request. The parameters can be passed
+	// using just headers, or within the request body.
+	s.parseWriteRequest(req, &args.WriteRequest)
+
+	if req.Body != nil {
+		if err := decodeBody(req, &args); err != nil {
+			return nil, CodedError(http.StatusBadRequest, err.Error())
+		}
+	}
+
+	var out structs.ACLCreateClientIntroductionTokenResponse
+	if err := s.agent.RPC(structs.ACLCreateClientIntroductionTokenRPCMethod, &args, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

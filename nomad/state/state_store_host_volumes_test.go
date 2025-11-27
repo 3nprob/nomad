@@ -103,6 +103,7 @@ func TestStateStore_HostVolumes_CRUD(t *testing.T) {
 
 	// simulate a node registering one of the volumes
 	nodes[2] = nodes[2].Copy()
+	nodes[2].GCVolumesOnNodeGC = true
 	nodes[2].HostVolumes = map[string]*structs.ClientHostVolumeConfig{"example": {
 		Name: vols[2].Name,
 		Path: vols[2].HostPath,
@@ -148,6 +149,18 @@ func TestStateStore_HostVolumes_CRUD(t *testing.T) {
 	must.EqError(t, err, fmt.Sprintf(
 		"could not delete volume %s in use by alloc %s", vols[2].ID, alloc.ID))
 
+	alloc = alloc.Copy()
+	alloc.DesiredStatus = structs.AllocDesiredStatusStop
+	index++
+	must.NoError(t, store.UpdateAllocsFromClient(structs.MsgTypeTestSetup,
+		index, []*structs.Allocation{alloc}))
+
+	index++
+	err = store.DeleteHostVolume(index, vol2.Namespace, vols[2].ID)
+	must.EqError(t, err, fmt.Sprintf(
+		"could not delete volume %s in use by alloc %s", vols[2].ID, alloc.ID),
+		must.Sprint("allocs must be client-terminal to delete their volumes"))
+
 	err = store.DeleteHostVolume(index, vol2.Namespace, vols[1].ID)
 	must.NoError(t, err)
 	vol, err = store.HostVolumeByID(nil, vols[1].Namespace, vols[1].ID, true)
@@ -180,6 +193,13 @@ func TestStateStore_HostVolumes_CRUD(t *testing.T) {
 	index++
 	must.NoError(t, store.UpdateAllocsFromClient(structs.MsgTypeTestSetup,
 		index, []*structs.Allocation{alloc}))
+
+	index++
+	must.NoError(t, store.DeleteNode(structs.MsgTypeTestSetup, index, []string{vol2.NodeID}))
+	iter, err = store.HostVolumesByNodeID(nil, vol2.NodeID, SortDefault)
+	must.NoError(t, err)
+	must.Nil(t, iter.Next(), must.Sprint("expected volume to be GC'd with node"))
+
 	for _, v := range vols {
 		index++
 		must.NoError(t, store.DeleteHostVolume(index, v.Namespace, v.ID))

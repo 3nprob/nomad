@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
+	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,7 @@ func TestConfig_Merge(t *testing.T) {
 		AdvertiseAddrs: &AdvertiseAddrs{},
 		Sentinel:       &config.SentinelConfig{},
 		Autopilot:      &config.AutopilotConfig{},
+		Eventlog:       &Eventlog{},
 	}
 
 	c2 := &Config{
@@ -235,6 +237,10 @@ func TestConfig_Merge(t *testing.T) {
 				},
 			},
 		},
+		Eventlog: &Eventlog{
+			Enabled: true,
+			Level:   "INFO",
+		},
 	}
 
 	c3 := &Config{
@@ -382,6 +388,7 @@ func TestConfig_Merge(t *testing.T) {
 			},
 			JobMaxPriority:     pointer.Of(200),
 			JobDefaultPriority: pointer.Of(100),
+			JobMaxCount:        pointer.Of(1000),
 			OIDCIssuer:         "https://oidc.test.nomadproject.io",
 			StartTimeout:       "1m",
 		},
@@ -487,6 +494,10 @@ func TestConfig_Merge(t *testing.T) {
 			License: &config.LicenseReportingConfig{
 				Enabled: pointer.Of(true),
 			},
+		},
+		Eventlog: &Eventlog{
+			Enabled: true,
+			Level:   "ERROR",
 		},
 	}
 
@@ -956,6 +967,33 @@ func TestConfig_normalizeAddrs_IPv6Loopback(t *testing.T) {
 	}
 }
 
+// TestConfig_normalizeAddrs_IPv6 asserts that bind and advertise addrs conform
+// to RFC 5942 §4: https://www.rfc-editor.org/rfc/rfc5942.html#section-4
+// Full coverage is provided by tests for ipaddr.NormalizeAddr
+func TestConfig_normalizeAddrs_IPv6(t *testing.T) {
+	c := &Config{
+		Addresses: &Addresses{},
+
+		BindAddr: "0:0::1F",
+		Ports: &Ports{
+			HTTP: 4646,
+			RPC:  4647,
+		},
+		AdvertiseAddrs: &AdvertiseAddrs{
+			HTTP: "[A110::0:0:C8]:8080",
+			RPC:  "0:00FA:0:0:0::CE",
+		},
+		DevMode: false,
+	}
+	must.NoError(t, c.normalizeAddrs())
+	test.Eq(t, "::1f", c.Addresses.HTTP, test.Sprint("bind HTTP"))
+	test.Eq(t, "::1f", c.Addresses.RPC, test.Sprint("bind RPC"))
+	test.Eq(t, []string{"[::1f]:4646"}, c.normalizedAddrs.HTTP, test.Sprint("normalized HTTP"))
+	test.Eq(t, "[::1f]:4647", c.normalizedAddrs.RPC, test.Sprint("normalized RPC"))
+	test.Eq(t, "[a110::c8]:8080", c.AdvertiseAddrs.HTTP, test.Sprint("advertise HTTP"))
+	test.Eq(t, "[0:fa::ce]:4647", c.AdvertiseAddrs.RPC, test.Sprint("advertise RPC"))
+}
+
 // TestConfig_normalizeAddrs_MultipleInterface asserts that normalizeAddrs will
 // handle normalizing multiple interfaces in a single protocol.
 func TestConfig_normalizeAddrs_MultipleInterfaces(t *testing.T) {
@@ -1229,6 +1267,123 @@ func TestIsMissingPort(t *testing.T) {
 	_, _, err = net.SplitHostPort("localhost:9000")
 	if missing := isMissingPort(err); missing {
 		t.Errorf("expected no error, but got %v", err)
+	}
+}
+
+func TestClientIntroduction_Copy(t *testing.T) {
+	ci.Parallel(t)
+
+	clientIntro := &ClientIntroduction{
+		Enforcement:        "warn",
+		DefaultIdentityTTL: 5 * time.Minute,
+		MaxIdentityTTL:     30 * time.Minute,
+	}
+
+	copiedClientIntro := clientIntro.Copy()
+
+	// Ensure the copied object contains the same values, but the underlying
+	// pointer address is different.
+	must.Eq(t, clientIntro, copiedClientIntro)
+	must.NotEq(t, fmt.Sprintf("%p", clientIntro), fmt.Sprintf("%p", copiedClientIntro))
+}
+
+func TestClientIntroduction_Merge(t *testing.T) {
+	ci.Parallel(t)
+
+	clientIntro1 := &ClientIntroduction{
+		Enforcement:        "warn",
+		DefaultIdentityTTL: 5 * time.Minute,
+		MaxIdentityTTL:     30 * time.Minute,
+		ExtraKeysHCL:       []string{"key1", "key2"},
+	}
+	clientIntro2 := &ClientIntroduction{
+		Enforcement:        "strict",
+		DefaultIdentityTTL: 30 * time.Minute,
+		MaxIdentityTTL:     60 * time.Minute,
+		ExtraKeysHCL:       []string{"key3", "key4"},
+	}
+	expectedClientIntro := &ClientIntroduction{
+		Enforcement:        "strict",
+		DefaultIdentityTTL: 30 * time.Minute,
+		MaxIdentityTTL:     60 * time.Minute,
+		ExtraKeysHCL:       []string{"key1", "key2", "key3", "key4"},
+	}
+	must.Eq(t, expectedClientIntro, clientIntro1.Merge(clientIntro2))
+}
+
+func TestClientIntroduction_Validate(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name                    string
+		inputClientIntroduction *ClientIntroduction
+		expectedError           bool
+	}{
+		{
+			name:                    "nil block",
+			inputClientIntroduction: nil,
+			expectedError:           false,
+		},
+		{
+			name: "empty enforcement",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement: "",
+			},
+			expectedError: true,
+		},
+		{
+			name: "invalid enforcement",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement: "nuclear",
+			},
+			expectedError: true,
+		},
+		{
+			name: "invalid default_identity_ttl",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement:        "warn",
+				DefaultIdentityTTL: 0,
+			},
+			expectedError: true,
+		},
+		{
+			name: "invalid max_identity_ttl",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement:        "warn",
+				DefaultIdentityTTL: 5 * time.Minute,
+				MaxIdentityTTL:     0,
+			},
+			expectedError: true,
+		},
+		{
+			name: "invalid ttl combination",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement:        "warn",
+				DefaultIdentityTTL: 5 * time.Minute,
+				MaxIdentityTTL:     4 * time.Minute,
+			},
+			expectedError: true,
+		},
+		{
+			name: "valid",
+			inputClientIntroduction: &ClientIntroduction{
+				Enforcement:        "warn",
+				DefaultIdentityTTL: 5 * time.Minute,
+				MaxIdentityTTL:     30 * time.Minute,
+			},
+			expectedError: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actualOutput := tc.inputClientIntroduction.Validate()
+			if tc.expectedError {
+				must.Error(t, actualOutput)
+			} else {
+				must.NoError(t, actualOutput)
+			}
+		})
 	}
 }
 
@@ -1843,4 +1998,111 @@ func Test_mergeKEKProviderConfigs(t *testing.T) {
 			},
 		},
 	}, result)
+}
+
+func TestConfig_LoadClientNodeMaxAllocs(t *testing.T) {
+	ci.Parallel(t)
+	testCases := []struct {
+		fileName string
+	}{
+		{
+			fileName: "test-resources/client_with_maxallocs.hcl",
+		},
+		{
+			fileName: "test-resources/client_with_maxallocs.json",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run("minimal client expect defaults", func(t *testing.T) {
+			defaultConfig := DefaultConfig()
+			agentConfig, err := LoadConfig(tc.fileName)
+			must.NoError(t, err)
+			agentConfig = defaultConfig.Merge(agentConfig)
+			must.Eq(t, 5, agentConfig.Client.NodeMaxAllocs)
+		})
+	}
+
+}
+
+func TestEventlog_Merge(t *testing.T) {
+	t.Run("nil rhs merge", func(t *testing.T) {
+		var c1, c2 *Eventlog
+		c1 = &Eventlog{
+			Enabled: true,
+			Level:   "info",
+		}
+		result := c1.Merge(c2)
+		must.Eq(t, result, c1)
+	})
+
+	t.Run("nil lhs merge", func(t *testing.T) {
+		var c1, c2 *Eventlog
+		c2 = &Eventlog{
+			Enabled: true,
+			Level:   "info",
+		}
+		result := c1.Merge(c2)
+		must.Eq(t, result, c2)
+	})
+
+	t.Run("full merge", func(t *testing.T) {
+		c1 := &Eventlog{
+			Enabled: false,
+			Level:   "info",
+		}
+		c2 := &Eventlog{
+			Enabled: true,
+			Level:   "error",
+		}
+		result := c1.Merge(c2)
+		must.True(t, result.Enabled)
+		must.Eq(t, result.Level, "error")
+	})
+
+	t.Run("enabled merge", func(t *testing.T) {
+		// NOTE: Can only be enabled, not disabled
+		c1 := &Eventlog{
+			Enabled: true,
+		}
+		c2 := &Eventlog{
+			Enabled: false,
+		}
+		result := c1.Merge(c2)
+		must.True(t, result.Enabled)
+
+	})
+}
+
+func TestEventlog_Validate(t *testing.T) {
+	ci.Parallel(t)
+	testCases := []struct {
+		desc      string
+		eventlog  *Eventlog
+		shouldErr bool
+	}{
+		{
+			desc:     "valid level",
+			eventlog: &Eventlog{Level: "info"},
+		},
+		{
+			desc:      "invalid level",
+			eventlog:  &Eventlog{Level: "debug"},
+			shouldErr: true,
+		},
+		{
+			desc: "nil eventlog",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			ci.Parallel(t)
+
+			if tc.shouldErr {
+				must.Error(t, tc.eventlog.Validate())
+			} else {
+				must.NoError(t, tc.eventlog.Validate())
+			}
+		})
+	}
 }

@@ -7,7 +7,6 @@ package executor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -34,9 +34,9 @@ import (
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/drivers"
+	"github.com/opencontainers/cgroups"
+	_ "github.com/opencontainers/cgroups/devices"
 	"github.com/opencontainers/runc/libcontainer"
-	"github.com/opencontainers/runc/libcontainer/cgroups"
-	_ "github.com/opencontainers/runc/libcontainer/cgroups/devices"
 	runc "github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/devices"
 	"github.com/opencontainers/runc/libcontainer/specconv"
@@ -230,14 +230,17 @@ func (l *LibcontainerExecutor) Launch(command *ExecCommand) (*ProcessState, erro
 	}
 
 	if command.User != "" {
-		process.User = command.User
-
 		// Override HOME and USER environment variables
 		u, err := users.Lookup(command.User)
 		if err != nil {
 			return nil, err
 		}
+		process.UID = func() int {
+			u, _ := strconv.Atoi(u.Uid)
+			return u
+		}()
 		process.Env = append(process.Env, fmt.Sprintf("USER=%s", u.Username))
+		process.Env = append(process.Env, fmt.Sprintf("LOGNAME=%s", u.Username))
 		process.Env = append(process.Env, fmt.Sprintf("HOME=%s", u.HomeDir))
 	}
 
@@ -445,7 +448,7 @@ func (l *LibcontainerExecutor) handleStats(ch chan *cstructs.TaskResourceUsage, 
 		stats := lstats.CgroupStats
 
 		// get the map of process pids in this container
-		pstats := l.processStats.StatProcesses()
+		pstats := l.processStats.StatProcesses(ts)
 
 		// Memory Related Stats
 		swap := stats.MemoryStats.SwapUsage
@@ -577,7 +580,7 @@ func (l *LibcontainerExecutor) ExecStreaming(ctx context.Context, cmd []string, 
 	process := &libcontainer.Process{
 		Args: cmd,
 		Env:  l.userProc.Env,
-		User: l.userProc.User,
+		UID:  l.userProc.UID,
 		Init: false,
 		Cwd:  l.command.WorkDir,
 	}
@@ -766,7 +769,7 @@ func (l *LibcontainerExecutor) configureCgroups(cfg *runc.Config, command *ExecC
 
 	cg := command.StatsCgroup()
 	if cg == "" {
-		return errors.New("cgroup must be set")
+		return fmt.Errorf("configureCgroups: %w", ErrCgroupMustBeSet)
 	}
 
 	// // set the libcontainer hook for writing the PID to cgroup.procs file
@@ -900,13 +903,15 @@ func (l *LibcontainerExecutor) clampCpuShares(shares int64) int64 {
 		)
 		return MinCPUShares
 	}
-	if shares > MaxCPUShares {
-		l.logger.Warn(
-			"task CPU is greater than maximum allowed, using maximum value instead",
-			"task_cpu", shares, "max", MaxCPUShares,
-		)
-		return MaxCPUShares
+
+	// Normalize the requested CPU shares when the total compute available on
+	// the node is larger than the largest share value allowed by the kernel. On
+	// cgroups v2 we'll later re-normalize this to be within the acceptable
+	// range for cpu.weight [1-10000].
+	if l.compute.TotalCompute >= MaxCPUShares {
+		return int64(float64(shares) / float64(l.compute.TotalCompute) * MaxCPUShares)
 	}
+
 	return shares
 }
 
